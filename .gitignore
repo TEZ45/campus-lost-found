@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Django local data and uploaded files
+db.sqlite3
+db.sqlite3-*
+local_settings.py
+/media/
+*.log
+
+# Test output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
