@@ -1,28 +1,73 @@
 # Campus Lost and Found Matching System
 
 A software engineering course project built with Python and Django.
-The system will help campus users publish lost and found reports,
+The system helps campus users publish lost and found reports,
 find possible matches, and submit claims for staff review.
 
-## Project Status
+## Quick Start
 
-Planning and repository setup. The features below are planned,
-not completed functions.
+### Prerequisites
 
-## Planned Features
+- Python 3.12+
+- uv (recommended) or pip
 
-- Submit and review lost and found reports.
-- Search approved reports by item details.
-- Suggest possible matches and provide reminders.
-- Submit private claim evidence for human review.
-- Update report status after item collection.
+### Setup
 
-## Technology
+```bash
+# Install dependencies
+uv sync
 
-- Backend: Python and Django
-- Frontend: HTML, CSS and JavaScript
+# Run migrations
+uv run python manage.py migrate
+
+# Create superuser (for admin)
+uv run python manage.py createsuperuser
+
+# Start dev server
+uv run python manage.py runserver
+```
+
+Then open http://127.0.0.1:8000/
+
+## Project Structure
+
+```
+campus-lost-found/
+├── config/              # Django project settings
+│   ├── settings.py
+│   ├── urls.py
+│   └── wsgi.py
+├── apps/
+│   └── reports/        # Reports, claims, and matches
+│       ├── models.py
+│       ├── views.py
+│       ├── admin.py
+│       └── forms.py
+├── templates/           # HTML templates
+├── static/              # Static files (CSS, JS, images)
+├── docs/                # Documentation
+├── tests/               # Test files
+├── manage.py
+└── pyproject.toml
+```
+
+## Features
+
+- Submit lost and found reports (with photos)
+- Staff review and approve reports in admin
+- Browse approved reports by type (lost / found)
+- Submit private claim evidence for found items
+- Staff review claims and approve / reject
+- Match suggestions between lost and found items
+
+## Tech Stack
+
+- Backend: Django 5 + Django REST Framework
+- Frontend: HTML templates with vanilla CSS/JS
+- Database: SQLite (dev) / PostgreSQL (prod)
+- Package manager: uv
 
 ## Team Collaboration
 
-All four members will contribute to development, testing and documentation.
-Feature changes will use separate branches and pull requests for review.
+All four members contribute to development, testing, and documentation.
+Feature changes use separate branches and pull requests for review.

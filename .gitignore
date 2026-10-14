@@ -1,11 +1,15 @@
 # Python cache
 __pycache__/
 *.py[cod]
+*$py.class
 
 # Virtual environments
 .venv/
 venv/
 env/
+
+# uv
+uv.lock
 
 # Local secrets
 .env
@@ -24,3 +28,8 @@ local_settings.py
 .coverage
 .coverage.*
 htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
