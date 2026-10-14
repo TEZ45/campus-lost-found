@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Claim - {{ report.item_name }}{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Claim: {{ report.item_name }}</h1>
+<div class="card">
+    <p style="margin-bottom: 1rem;">Found item: <strong>{{ report.item_name }}</strong> at {{ report.location }}</p>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}
+            <small style="color: #666;">{{ field.help_text }}</small>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-success">Submit Claim</button>
+    </form>
+</div>
+{% endblock %}

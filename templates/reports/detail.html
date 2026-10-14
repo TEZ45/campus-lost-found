@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}{{ report.item_name }} - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<div class="card">
+    <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">
+        {{ report.get_report_type_display }}
+    </span>
+    <h1 style="margin: 0.5rem 0;">{{ report.item_name }}</h1>
+    <p style="color: #666;">
+        📍 {{ report.location }} | 📅 {{ report.event_date }} | Status: {{ report.get_status_display }}
+    </p>
+    <hr style="margin: 1rem 0;">
+    <p>{{ report.description }}</p>
+    {% if report.photo %}
+    <img src="{{ report.photo.url }}" alt="{{ report.item_name }}" style="max-width: 100%; margin-top: 1rem; border-radius: 4px;">
+    {% endif %}
+    <hr style="margin: 1rem 0;">
+    <p><strong>Contact:</strong> {{ report.contact_name }} | {{ report.contact_email }}</p>
+
+    {% if report.report_type == 'found' %}
+    <a href="{% url 'claim_create' report.pk %}" class="btn btn-success" style="margin-top: 1rem;">This is mine - Submit Claim</a>
+    {% endif %}
+</div>
+
+{% if claims %}
+<h2>Claims for this item</h2>
+{% for claim in claims %}
+<div class="card">
+    <p><strong>{{ claim.claimant_name }}</strong> - {{ claim.get_status_display }}</p>
+    <p style="font-size: 0.9rem; color: #666;">{{ claim.evidence|truncatewords:20 }}</p>
+</div>
+{% endfor %}
+{% endif %}
+
+<a href="/" style="display: inline-block; margin-top: 1rem;">← Back to all reports</a>
+{% endblock %}
