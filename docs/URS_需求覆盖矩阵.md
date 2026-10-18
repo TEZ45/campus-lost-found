@@ -65,3 +65,17 @@
 5. 通知 + 历史
 6. 匹配建议（基础版）
 7. 测试（A1-A6）与需求回核
+
+## 7. 实现与验证结果（2026-10-18）
+
+**已实现（全部 Must + 核心 Should + Could 基础版）**：
+- 模型层：Report.category、close_requested 状态；Claim 九态状态机（含 BEFORE_HANDOVER / RESERVED_STATES / FINAL_STATES 常量、transition 方法、事务内历史+通知）；UserProfile.is_service_staff（SEC-1.3 业务授权与管理员分离）；ClaimAttachment（CAP-3.1 多图）；Notice；ActionHistory；Match.reason。
+- 视图层：注册/登录/登出；报告提交/详情/编辑（所有者、公开内容改后回审）/关闭申请；搜索（关键词+类型/类别/地点/日期/状态）；声明提交/详情（证据权限）/重提交/撤销；员工仪表盘、报告审核队列（批准/拒绝+理由/关闭）、声明审核队列（批准/拒绝/请求证据）、发放与争议队列（开始发放/完成/安全中断/争议开始/争议解决）；通知页；匹配建议生成+展示。
+- 附件约束：报告单图、claim 每次 ≤3 图、累计 ≤5、单图 ≤5 MB、仅 JPG/PNG。
+- 迁移 0002（状态机/字段/模型）+ 0003（UserProfile）已应用。
+
+**验证结果**：
+- `pytest`：28 passed（覆盖 A1-A6、SEC-1.2/1.3、搜索、角色、通知、历史、附件限制、匹配建议）。
+- `ruff check`：0 错误（RUF012 已按 Django 惯例忽略）。
+- `manage.py check`：0 错误 0 警告（已建 static/ 目录）。
+- 已本地 git commit（未 push；push 需用户授权与凭据）。
