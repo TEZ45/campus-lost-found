@@ -3,20 +3,27 @@
 {% block title %}{{ title }} - Campus Lost & Found{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">{{ title }}</h1>
 <div class="card">
+    <h1 style="margin-bottom: 1rem;">{{ title }}</h1>
+
+    {% if form.errors %}
+    <div class="form-errors">
+        <strong>Please correct the following:</strong>
+        <ul>
+            {% for field, errors in form.errors.items %}
+                {% for error in errors %}<li>{{ field }}: {{ error }}</li>{% endfor %}
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
     <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
         {% for field in form %}
         <div class="form-group">
             <label for="{{ field.id_for_label }}">{{ field.label }}</label>
             {{ field }}
-            {% if field.help_text %}
-            <small style="color: #666;">{{ field.help_text }}</small>
-            {% endif %}
-            {% if field.errors %}
-            <small style="color: red;">{{ field.errors }}</small>
-            {% endif %}
+            {% if field.help_text %}<small class="meta">{{ field.help_text }}</small>{% endif %}
         </div>
         {% endfor %}
         <button type="submit" class="btn btn-success">Submit Report</button>

@@ -1,29 +1,64 @@
 {% extends "base.html" %}
 
-{% block title %}Reports - Campus Lost & Found{% endblock %}
+{% block title %}Search Reports - Campus Lost & Found{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">
-    {% if report_type == 'lost' %}Lost Items
-    {% elif report_type == 'found' %}Found Items
-    {% else %}All Reports{% endif %}
-</h1>
+<h1 style="margin-bottom: 1rem;">Search Reports</h1>
+
+<div class="card">
+    <form method="get" action="{% url 'report_list' %}">
+        <div class="form-group">
+            <label for="id_q">Keyword</label>
+            {{ form.q }}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;">
+            <div class="form-group">
+                <label for="id_report_type">Type</label>
+                {{ form.report_type }}
+            </div>
+            <div class="form-group">
+                <label for="id_category">Category</label>
+                {{ form.category }}
+            </div>
+            <div class="form-group">
+                <label for="id_location">Location</label>
+                {{ form.location }}
+            </div>
+            <div class="form-group">
+                <label for="id_date_from">Date from</label>
+                {{ form.date_from }}
+            </div>
+            <div class="form-group">
+                <label for="id_date_to">Date to</label>
+                {{ form.date_to }}
+            </div>
+            {% if user.is_authenticated and user.is_staff %}
+            <div class="form-group">
+                <label for="id_status">Status</label>
+                {{ form.status }}
+            </div>
+            {% endif %}
+        </div>
+        <button type="submit" class="btn">Search</button>
+        <a href="{% url 'report_list' %}" style="margin-left: 0.5rem;">Clear</a>
+    </form>
+</div>
 
 {% for report in reports %}
 <div class="card">
     <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">
         {{ report.get_report_type_display }}
     </span>
+    {% if report.category %}<span class="badge badge-status">{{ report.category }}</span>{% endif %}
+    <span class="badge badge-status">Status: {{ report.get_status_display }}</span>
     <h3 style="margin: 0.5rem 0;">{{ report.item_name }}</h3>
-    <p style="color: #666; font-size: 0.9rem;">
-        📍 {{ report.location }} | 📅 {{ report.event_date }}
-    </p>
+    <p class="meta">{{ report.location }} | {{ report.event_date }}</p>
     <p style="margin-top: 0.5rem;">{{ report.description|truncatewords:30 }}</p>
     <a href="{% url 'report_detail' report.pk %}" class="btn" style="margin-top: 0.5rem;">View Details</a>
 </div>
 {% empty %}
 <div class="card">
-    <p>No reports found. Be the first to <a href="/report/new/">submit a report</a>!</p>
+    <p>No reports match your criteria. Try changing the search terms, or <a href="/report/new/">submit a report</a>.</p>
 </div>
 {% endfor %}
 {% endblock %}

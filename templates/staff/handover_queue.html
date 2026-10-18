@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Handovers & Disputes - Staff{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Handovers & Disputes</h1>
+<p class="meta" style="margin-bottom: 1rem;">Awaiting Handover, Under Dispute Review and Handover in Progress share one exclusive reservation (DOM-3).</p>
+
+{% for claim in claims %}
+<div class="card">
+    <h3 style="margin-bottom: 0.25rem;">Claim {{ claim.reference }} — {{ claim.report.item_name }} ({{ claim.report.reference }})</h3>
+    <p class="meta">Claimant: {{ claim.claimant_name }} | Status: <strong>{{ claim.get_status_display }}</strong></p>
+    <p style="margin-top: 0.5rem;">{{ claim.evidence|truncatewords:30 }}</p>
+
+    <form method="post" action="{% url 'staff_handover_action' claim.pk %}" style="margin-top: 1rem;">
+        {% csrf_token %}
+        <input type="text" name="reason" placeholder="Reason (required for interruption / dispute decisions)" style="width: 70%; padding: 0.4rem; margin-bottom: 0.5rem;">
+        <div>
+            {% if claim.status == 'awaiting_handover' %}
+                <button type="submit" name="action" value="start_handover" class="btn btn-success">Start handover</button>
+                <button type="submit" name="action" value="start_dispute" class="btn btn-warning">Start dispute review</button>
+            {% elif claim.status == 'under_dispute' %}
+                <button type="submit" name="action" value="resolve_keep" class="btn btn-success">Resolve - keep approval</button>
+                <button type="submit" name="action" value="resolve_reject" class="btn btn-danger">Resolve - reject</button>
+            {% elif claim.status == 'handover_in_progress' %}
+                <button type="submit" name="action" value="complete_handover" class="btn btn-success">Complete handover</button>
+                <button type="submit" name="action" value="interrupt_handover" class="btn btn-warning">Interrupt (safe)</button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% empty %}
+<div class="card"><p>No claims in handover or dispute states.</p></div>
+{% endfor %}
+
+<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">← Back to dashboard</a>
+{% endblock %}

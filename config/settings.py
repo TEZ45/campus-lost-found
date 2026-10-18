@@ -1,8 +1,9 @@
 """
 Django settings for Campus Lost and Found project.
 """
-from pathlib import Path
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -49,6 +50,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "apps.reports.context_processors.unread_notices",
             ],
         },
     },
@@ -82,3 +84,11 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+MEDIA_URL_ABS = MEDIA_URL  # attachments served via static() in DEBUG
+
+# Attachment size guard (CAP-3.1), enforced in forms too.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024  # 6 MB (one 5 MB image + form overhead)

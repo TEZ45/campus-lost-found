@@ -24,3 +24,4 @@ python_files = ["test_*.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+ignore = ["RUF012"]  # Django model field/choices lists are intended mutable class attrs

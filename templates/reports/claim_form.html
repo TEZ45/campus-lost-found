@@ -1,23 +1,42 @@
 {% extends "base.html" %}
 
-{% block title %}Claim - {{ report.item_name }}{% endblock %}
+{% block title %}Submit Claim - Campus Lost & Found{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Claim: {{ report.item_name }}</h1>
 <div class="card">
-    <p style="margin-bottom: 1rem;">Found item: <strong>{{ report.item_name }}</strong> at {{ report.location }}</p>
+    <h1 style="margin-bottom: 0.5rem;">Submit Claim</h1>
+    <p>Claiming: <strong>{{ report.item_name }}</strong> ({{ report.reference }})</p>
+    <p class="meta" style="margin-bottom: 1rem;">Evidence is private: only you and authorised staff can see it.</p>
+
+    {% if form.errors %}
+    <div class="form-errors">
+        <strong>Please correct the following:</strong>
+        <ul>
+            {% for field, errors in form.errors.items %}
+                {% for error in errors %}<li>{{ field }}: {{ error }}</li>{% endfor %}
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
     <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
-        {% for field in form %}
         <div class="form-group">
-            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-            {{ field }}
-            {% if field.help_text %}
-            <small style="color: #666;">{{ field.help_text }}</small>
-            {% endif %}
+            <label for="{{ form.evidence.id_for_label }}">Evidence</label>
+            {{ form.evidence }}
         </div>
-        {% endfor %}
-        <button type="submit" class="btn btn-success">Submit Claim</button>
+        <div class="form-group">
+            <label for="{{ form.images.id_for_label }}">Evidence images (optional, up to 3 per submission; JPG/PNG, max 5 MB each)</label>
+            {{ form.images }}
+        </div>
+        <button type="submit" class="btn btn-success">
+            {% if resubmit %}Resubmit Evidence{% else %}Submit Claim{% endif %}
+        </button>
+        {% if claim %}
+        <a href="{% url 'claim_detail' claim.pk %}" style="margin-left: 0.5rem;">Cancel</a>
+        {% else %}
+        <a href="{% url 'report_detail' report.pk %}" style="margin-left: 0.5rem;">Cancel</a>
+        {% endif %}
     </form>
 </div>
 {% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Report Moderation - Staff{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Report Moderation</h1>
+
+{% for report in reports %}
+<div class="card">
+    <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">{{ report.get_report_type_display }}</span>
+    <span class="badge badge-status">Status: {{ report.get_status_display }}</span>
+    <h3 style="margin: 0.5rem 0;">{{ report.item_name }}</h3>
+    <p class="meta">{{ report.location }} | {{ report.event_date }} | {{ report.reference }} | by {{ report.created_by|default:"anonymous" }}</p>
+    <p style="margin-top: 0.5rem;">{{ report.description|truncatewords:40 }}</p>
+    {% if report.photo %}
+    <img src="{{ report.photo.url }}" alt="{{ report.item_name }}" style="max-width: 200px; margin-top: 0.5rem; border-radius: 4px;">
+    {% endif %}
+
+    <form method="post" action="{% url 'staff_report_review' report.pk %}" style="margin-top: 1rem;">
+        {% csrf_token %}
+        {% if report.status == 'pending' %}
+            <input type="text" name="reason" placeholder="Reason (required for rejection)" style="width: 60%; padding: 0.4rem; margin-bottom: 0.5rem;">
+            <div>
+                <button type="submit" name="action" value="approve" class="btn btn-success">Approve & publish</button>
+                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
+            </div>
+        {% elif report.status == 'close_requested' %}
+            <div>
+                <button type="submit" name="action" value="close" class="btn btn-warning">Approve closure</button>
+            </div>
+        {% endif %}
+    </form>
+</div>
+{% empty %}
+<div class="card"><p>No reports waiting for moderation.</p></div>
+{% endfor %}
+
+<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">← Back to dashboard</a>
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Register - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1 style="margin-bottom: 1rem;">Create an account</h1>
+    {% if form.errors %}
+    <div class="form-errors">
+        <ul>
+            {% for field, errors in form.errors.items %}
+                {% for error in errors %}<li>{{ field }}: {{ error }}</li>{% endfor %}
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group"><label>Username</label>{{ form.username }}</div>
+        <div class="form-group"><label>Password</label>{{ form.password1 }}</div>
+        <div class="form-group"><label>Password confirmation</label>{{ form.password2 }}</div>
+        <button type="submit" class="btn btn-success">Register</button>
+    </form>
+    <p style="margin-top: 1rem;">Already have an account? <a href="/login/">Login</a></p>
+</div>
+{% endblock %}

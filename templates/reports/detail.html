@@ -7,29 +7,44 @@
     <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">
         {{ report.get_report_type_display }}
     </span>
+    {% if report.category %}<span class="badge badge-status">{{ report.category }}</span>{% endif %}
+    <span class="badge badge-status">Status: {{ report.get_status_display }}</span>
     <h1 style="margin: 0.5rem 0;">{{ report.item_name }}</h1>
-    <p style="color: #666;">
-        📍 {{ report.location }} | 📅 {{ report.event_date }} | Status: {{ report.get_status_display }}
-    </p>
+    <p class="meta">{{ report.location }} | {{ report.event_date }}</p>
     <hr style="margin: 1rem 0;">
     <p>{{ report.description }}</p>
     {% if report.photo %}
     <img src="{{ report.photo.url }}" alt="{{ report.item_name }}" style="max-width: 100%; margin-top: 1rem; border-radius: 4px;">
     {% endif %}
     <hr style="margin: 1rem 0;">
-    <p><strong>Contact:</strong> {{ report.contact_name }} | {{ report.contact_email }}</p>
+    <p class="meta">Report reference: {{ report.reference }}</p>
 
-    {% if report.report_type == 'found' %}
-    <a href="{% url 'claim_create' report.pk %}" class="btn btn-success" style="margin-top: 1rem;">This is mine - Submit Claim</a>
-    {% endif %}
+    <div style="margin-top: 1rem;">
+        {% if report.report_type == 'found' and report.status == 'approved' %}
+            {% if user.is_authenticated %}
+            <a href="{% url 'claim_create' report.pk %}" class="btn btn-success">This is mine - Submit Claim</a>
+            {% else %}
+            <a href="/login/?next={{ request.path }}" class="btn">Login to submit a claim</a>
+            {% endif %}
+        {% endif %}
+
+        {% if user.is_authenticated and report.created_by == user %}
+            <a href="{% url 'report_edit' report.pk %}" class="btn" style="margin-left: 0.5rem;">Edit</a>
+            {% if report.status != 'closed' and report.status != 'close_requested' %}
+            <a href="{% url 'report_close_request' report.pk %}" class="btn btn-warning" style="margin-left: 0.5rem;">Request Closure</a>
+            {% endif %}
+        {% endif %}
+    </div>
 </div>
 
-{% if claims %}
-<h2>Claims for this item</h2>
-{% for claim in claims %}
+{% if matches %}
+<h2 style="margin: 1rem 0 0.5rem;">Suggested matches</h2>
+{% for match in matches %}
 <div class="card">
-    <p><strong>{{ claim.claimant_name }}</strong> - {{ claim.get_status_display }}</p>
-    <p style="font-size: 0.9rem; color: #666;">{{ claim.evidence|truncatewords:20 }}</p>
+    <p><strong>{{ match.lost_report.item_name }}</strong> ↔ <strong>{{ match.found_report.item_name }}</strong>
+        <span class="badge badge-status">score {{ match.score|floatformat:0 }}%</span></p>
+    {% if match.reason %}<p class="meta">Reason: {{ match.reason }}</p>{% endif %}
+    <p class="meta">A suggested match never proves ownership (a staff member verifies claims separately).</p>
 </div>
 {% endfor %}
 {% endif %}

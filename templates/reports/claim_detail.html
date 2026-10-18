@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Claim {{ claim.reference }} - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1 style="margin-bottom: 0.5rem;">Claim {{ claim.reference }}</h1>
+    <p>
+        <span class="badge badge-status">Status: {{ claim.get_status_display }}</span>
+        <span class="badge {% if claim.report.report_type == 'found' %}badge-found{% else %}badge-lost{% endif %}">
+            {{ claim.report.get_report_type_display }}
+        </span>
+    </p>
+    <p style="margin-top: 0.75rem;">Item: <a href="{% url 'report_detail' claim.report.pk %}">{{ claim.report.item_name }}</a>
+        ({{ claim.report.reference }})</p>
+    <p class="meta">Submitted: {{ claim.created_at|date:"Y-m-d H:i" }}</p>
+</div>
+
+<div class="card">
+    <h2 style="margin-bottom: 0.5rem;">Your evidence</h2>
+    <p>{{ claim.evidence }}</p>
+    {% for att in claim.attachments.all %}
+    <img src="{{ att.image.url }}" alt="Evidence image" style="max-width: 220px; margin: 0.5rem 0.5rem 0 0; border-radius: 4px;">
+    {% endfor %}
+</div>
+
+{% if claim.status == 'awaiting_evidence' and claim.claimant == user %}
+<div class="card">
+    <h2 style="margin-bottom: 0.5rem;">Staff requested additional evidence</h2>
+    {% if resubmit_form.errors %}
+    <div class="form-errors">
+        <ul>
+            {% for field, errors in resubmit_form.errors.items %}
+                {% for error in errors %}<li>{{ field }}: {{ error }}</li>{% endfor %}
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+    <form method="post" action="{% url 'claim_resubmit' claim.pk %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="{{ resubmit_form.evidence.id_for_label }}">Updated evidence</label>
+            {{ resubmit_form.evidence }}
+        </div>
+        <div class="form-group">
+            <label for="{{ resubmit_form.images.id_for_label }}">Additional images (up to 3; JPG/PNG, max 5 MB each)</label>
+            {{ resubmit_form.images }}
+        </div>
+        <button type="submit" class="btn btn-success">Resubmit Evidence</button>
+    </form>
+</div>
+{% endif %}
+
+{% if claim.claimant == user and claim.status in claim.BEFORE_HANDOVER %}
+<div class="card">
+    <form method="post" action="{% url 'claim_withdraw' claim.pk %}" onsubmit="return confirm('Withdraw this claim?');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">Withdraw Claim</button>
+    </form>
+</div>
+{% endif %}
+
+{% if claim.history.exists %}
+<div class="card">
+    <h2 style="margin-bottom: 0.5rem;">History</h2>
+    <table>
+        <tr><th>Time</th><th>Action</th><th>From</th><th>To</th><th>Reason</th></tr>
+        {% for h in claim.history.all %}
+        <tr>
+            <td>{{ h.created_at|date:"Y-m-d H:i" }}</td>
+            <td>{{ h.action }}</td>
+            <td>{{ h.previous_state|default:"-" }}</td>
+            <td>{{ h.new_state|default:"-" }}</td>
+            <td>{{ h.reason|default:"-" }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+{% endif %}
+
+<a href="/" style="display: inline-block; margin-top: 1rem;">← Back to all reports</a>
+{% endblock %}

@@ -7,32 +7,61 @@
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }
-        nav { background: #2c3e50; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        nav { background: #2c3e50; color: white; padding: 0.75rem 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
         nav a { color: white; text-decoration: none; margin-left: 1rem; }
+        nav .right { display: flex; align-items: center; flex-wrap: wrap; }
         .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
         .card { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .btn { display: inline-block; padding: 0.5rem 1rem; background: #3498db; color: white; border-radius: 4px; text-decoration: none; border: none; cursor: pointer; }
+        .btn { display: inline-block; padding: 0.5rem 1rem; background: #3498db; color: white; border-radius: 4px; text-decoration: none; border: none; cursor: pointer; font-size: 0.95rem; }
         .btn:hover { background: #2980b9; }
         .btn-success { background: #27ae60; }
+        .btn-success:hover { background: #1e8449; }
+        .btn-danger { background: #e74c3c; }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-warning { background: #f39c12; }
         .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
         .badge-lost { background: #e74c3c; color: white; }
         .badge-found { background: #27ae60; color: white; }
+        .badge-status { background: #ecf0f1; color: #333; }
+        .badge-notice { background: #e74c3c; color: white; border-radius: 10px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
         .messages { list-style: none; margin-bottom: 1rem; }
         .messages li { padding: 0.75rem; border-radius: 4px; margin-bottom: 0.5rem; }
         .messages li.success { background: #d4edda; color: #155724; }
+        .messages li.error { background: #f8d7da; color: #721c24; }
+        .messages li.info { background: #d1ecf1; color: #0c5460; }
+        .messages li.warning { background: #fff3cd; color: #856404; }
         .form-group { margin-bottom: 1rem; }
         .form-group label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
         .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; }
+        .form-errors { color: #721c24; background: #f8d7da; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; }
+        .form-errors li { margin-left: 1rem; }
+        .meta { color: #666; font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #eee; }
+        th { background: #ecf0f1; }
+        .field-error { color: #e74c3c; font-size: 0.85rem; }
+        @media (max-width: 640px) {
+            nav { flex-direction: column; align-items: flex-start; }
+            nav .right { margin-top: 0.25rem; }
+        }
     </style>
 </head>
 <body>
     <nav>
         <a href="/"><strong>Campus Lost & Found</strong></a>
-        <div>
-            <a href="/?type=lost">Lost</a>
-            <a href="/?type=found">Found</a>
+        <div class="right">
+            <a href="/matches/">Matches</a>
             <a href="/report/new/">New Report</a>
-            <a href="/admin/">Admin</a>
+            {% if user.is_authenticated %}
+                {% if is_service_staff %}
+                    <a href="/staff/">Staff</a>
+                {% endif %}
+                <a href="/notices/">Notices{% if unread_count %}<span class="badge-notice"> {{ unread_count }}</span>{% endif %}</a>
+                <a href="/logout/">Logout ({{ user.username }})</a>
+            {% else %}
+                <a href="/login/">Login</a>
+                <a href="/register/">Register</a>
+            {% endif %}
         </div>
     </nav>
     <div class="container">

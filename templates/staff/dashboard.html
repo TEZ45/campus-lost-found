@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Staff Dashboard - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Staff Dashboard</h1>
+
+<div class="card">
+    <h2 style="margin-bottom: 0.75rem;">Queues</h2>
+    <table>
+        <tr><th>Queue</th><th>Pending</th><th></th></tr>
+        <tr><td>Report moderation (pending + closure requests)</td><td>{{ pending_reports }} / {{ close_requests }} close requests</td>
+            <td><a href="{% url 'staff_report_queue' %}" class="btn">Open</a></td></tr>
+        <tr><td>Claim review</td><td>{{ pending_claims }} pending, {{ awaiting_evidence }} awaiting evidence</td>
+            <td><a href="{% url 'staff_claim_queue' %}" class="btn">Open</a></td></tr>
+        <tr><td>Handovers & disputes</td><td>{{ awaiting_handover }} awaiting, {{ under_dispute }} in dispute, {{ handover_in_progress }} in progress</td>
+            <td><a href="{% url 'staff_handover_queue' %}" class="btn">Open</a></td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2 style="margin-bottom: 0.5rem;">Quick actions</h2>
+    <a href="{% url 'matches' %}" class="btn">Suggested matches</a>
+    <a href="/admin/" class="btn" style="margin-left: 0.5rem;">Django admin</a>
+</div>
+{% endblock %}

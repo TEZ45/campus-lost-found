@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Claim Review - Staff{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Claim Review</h1>
+
+{% for claim in claims %}
+<div class="card">
+    <h3 style="margin-bottom: 0.25rem;">Claim {{ claim.reference }} — {{ claim.report.item_name }} ({{ claim.report.reference }})</h3>
+    <p class="meta">Claimant: {{ claim.claimant_name }} ({{ claim.claimant_email }}) | Status: {{ claim.get_status_display }}</p>
+    <hr style="margin: 0.75rem 0;">
+    <p><strong>Evidence:</strong> {{ claim.evidence }}</p>
+    {% for att in claim.attachments.all %}
+    <img src="{{ att.image.url }}" alt="Evidence" style="max-width: 180px; margin: 0.5rem 0.5rem 0 0; border-radius: 4px;">
+    {% endfor %}
+
+    <form method="post" action="{% url 'staff_claim_review' claim.pk %}" style="margin-top: 1rem;">
+        {% csrf_token %}
+        <input type="text" name="reason" placeholder="Reason (required for rejection; useful for evidence requests)" style="width: 70%; padding: 0.4rem; margin-bottom: 0.5rem;">
+        <div>
+            {% if claim.status == 'pending' %}
+                <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
+                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
+                <button type="submit" name="action" value="request_evidence" class="btn btn-warning">Request evidence</button>
+            {% elif claim.status == 'awaiting_evidence' %}
+                <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
+                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% empty %}
+<div class="card"><p>No claims waiting for review.</p></div>
+{% endfor %}
+
+<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">← Back to dashboard</a>
+{% endblock %}

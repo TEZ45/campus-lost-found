@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Notices - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Notices</h1>
+{% for notice in notices %}
+<div class="card" style="{% if not notice.is_read %}border-left: 4px solid #3498db;{% endif %}">
+    <p><strong>{{ notice.title }}</strong>
+        <span class="meta">{{ notice.created_at|date:"Y-m-d H:i" }}</span>
+        {% if not notice.is_read %}<span class="badge badge-found">new</span>{% endif %}
+    </p>
+    {% if notice.body %}<p style="margin-top: 0.25rem;">{{ notice.body }}</p>{% endif %}
+    {% if notice.link %}<a href="{% url 'notice_read' notice.pk %}" style="display: inline-block; margin-top: 0.5rem;">View & mark read</a>{% endif %}
+</div>
+{% empty %}
+<div class="card"><p>You have no notices yet.</p></div>
+{% endfor %}
+{% endblock %}

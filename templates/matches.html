@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Suggested Matches - Campus Lost & Found{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 0.5rem;">Suggested Matches</h1>
+<p class="meta" style="margin-bottom: 1rem;">Candidate lost↔found pairs are suggestions only; they never establish ownership (DOM-1).</p>
+
+<form method="post" style="margin-bottom: 1rem;">
+    {% csrf_token %}
+    <button type="submit" class="btn">Regenerate suggestions</button>
+</form>
+
+{% for match in matches %}
+<div class="card">
+    <p><strong>{{ match.lost_report.item_name }}</strong> ({{ match.lost_report.reference }})
+        ↔ <strong>{{ match.found_report.item_name }}</strong> ({{ match.found_report.reference }})
+        <span class="badge badge-status">score {{ match.score|floatformat:0 }}%</span></p>
+    {% if match.reason %}<p class="meta">Reason: {{ match.reason }}</p>{% endif %}
+    <a href="{% url 'report_detail' match.lost_report.pk %}" class="btn" style="margin-top: 0.5rem;">View lost report</a>
+    <a href="{% url 'report_detail' match.found_report.pk %}" class="btn" style="margin-top: 0.5rem;">View found report</a>
+</div>
+{% empty %}
+<div class="card"><p>No suggested matches yet. Approve some reports and regenerate.</p></div>
+{% endfor %}
+{% endblock %}
