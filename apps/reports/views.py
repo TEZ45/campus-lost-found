@@ -1,4 +1,5 @@
 from functools import wraps
+from urllib.parse import urlparse
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -104,18 +105,30 @@ def register(request):
     return render(request, "register.html", {"form": form})
 
 
+from urllib.parse import urlparse
+
+
+def _safe_next(value):
+    """Allow only local paths for the post-login redirect (prevent open redirects)."""
+    if not value:
+        return "report_list"
+    if value.startswith("//") or urlparse(value).netloc:
+        return "report_list"
+    return value
+
+
 def login_view(request):
     if request.user.is_authenticated:
         return redirect("report_list")
+    next_url = _safe_next(request.POST.get("next") or request.GET.get("next"))
     if request.method == "POST":
         form = AuthenticationForm(request, data=request.POST)
         if form.is_valid():
             login(request, form.get_user())
-            next_url = request.GET.get("next", "report_list")
             return redirect(next_url)
     else:
         form = AuthenticationForm(request)
-    return render(request, "login.html", {"form": form})
+    return render(request, "login.html", {"form": form, "next": next_url})
 
 
 def logout_view(request):
