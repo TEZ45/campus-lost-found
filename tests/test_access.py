@@ -314,10 +314,10 @@ def test_report_attachment_single_image(client, alice):
 # ------------------------------------------------------------------ #
 
 @pytest.mark.django_db
-def test_matches_generation_and_reason(client, alice):
+def test_matches_generation_and_reason(client, staff_user, alice):
     lost = make_report(alice, report_type="lost", item="Black Wallet", category="Accessories")
     found = make_report(alice, report_type="found", item="Wallet Black", category="Accessories")
-    client.force_login(alice)
+    client.force_login(staff_user)
     client.post(reverse("matches"))
     match = Match.objects.filter(lost_report=lost, found_report=found).first()
     assert match is not None
@@ -325,3 +325,32 @@ def test_matches_generation_and_reason(client, alice):
     assert match.reason  # reason present
     # Suggested matches never approve claims automatically (DOM-1).
     assert match.status == "suggested"
+
+
+@pytest.mark.django_db
+def test_matches_regeneration_is_staff_only(client, alice):
+    """Anonymous / plain users must not trigger the bulk write over all reports."""
+    make_report(alice, report_type="lost", item="Lost Pen", category="Other")
+    make_report(alice, report_type="found", item="Found Pen", category="Other")
+
+    assert client.post(reverse("matches")).status_code == 302  # anonymous -> login
+    client.force_login(alice)
+    assert client.post(reverse("matches")).status_code == 403
+    assert not Match.objects.exists()
+    # Reading suggestions stays available to everyone.
+    assert client.get(reverse("matches")).status_code == 200
+
+
+@pytest.mark.django_db
+def test_matches_hide_pairs_that_are_no_longer_public(client, staff_user, alice):
+    lost = make_report(alice, report_type="lost", item="Lost Umbrella", category="Other")
+    found = make_report(alice, report_type="found", item="Found Umbrella", category="Other")
+    client.force_login(staff_user)
+    client.post(reverse("matches"))
+    assert Match.objects.count() == 1
+
+    found.status = "rejected"
+    found.save(update_fields=["status"])
+
+    assert b"Found Umbrella" not in client.get(reverse("matches")).content
+    assert b"Found Umbrella" not in client.get(reverse("report_detail", args=[lost.pk])).content
