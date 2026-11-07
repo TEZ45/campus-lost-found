@@ -186,6 +186,25 @@ def test_close_request_flow(client, staff_user, alice):
 # ------------------------------------------------------------------ #
 
 @pytest.mark.django_db
+def test_notices_require_login(client):
+    """Anonymous access used to raise 500 while filtering by AnonymousUser."""
+    resp = client.get(reverse("notices"))
+    assert resp.status_code == 302
+    assert resp.url.startswith("/login/")
+
+
+@pytest.mark.django_db
+def test_notices_show_only_own(client, alice, bob):
+    Notice.objects.create(user=alice, title="Alice notice")
+    Notice.objects.create(user=bob, title="Bob notice")
+    client.force_login(alice)
+    resp = client.get(reverse("notices"))
+    assert resp.status_code == 200
+    assert b"Alice notice" in resp.content
+    assert b"Bob notice" not in resp.content
+
+
+@pytest.mark.django_db
 def test_staff_actions_generate_notices(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
