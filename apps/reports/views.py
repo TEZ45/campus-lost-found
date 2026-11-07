@@ -6,6 +6,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.db.models import Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import ClaimForm, ReportForm, SearchForm
@@ -44,6 +45,22 @@ def can_read_evidence(user, claim):
     if claim.claimant is not None and user == claim.claimant:
         return True
     return _is_service_staff(user)
+
+
+def can_view_report(user, report):
+    """SEC-1.3: only approved reports are public.
+
+    Everything else (pending / rejected / closure requested / closed) stays visible
+    to the owner, to authorised service staff, and to users who filed a claim on it
+    (their claim page links back to the item).
+    """
+    if report.is_public():
+        return True
+    if not user.is_authenticated:
+        return False
+    if report.created_by_id == user.id or _is_service_staff(user):
+        return True
+    return report.claims.filter(claimant=user).exists()
 
 
 def log_history(action, actor, report=None, claim=None, prev="", new="", reason="", result=""):
@@ -171,6 +188,9 @@ def report_list(request):
 
 def report_detail(request, pk):
     report = get_object_or_404(Report, pk=pk)
+    if not can_view_report(request.user, report):
+        # 404 rather than 403 so a non-public report does not confirm its existence.
+        raise Http404("Report not found")
     matches = report.lost_matches.all() if report.report_type == "lost" else report.found_matches.all()
     return render(request, "reports/detail.html", {"report": report, "matches": matches})
 

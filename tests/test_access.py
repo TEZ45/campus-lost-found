@@ -129,6 +129,46 @@ def test_public_pages_hide_contact_details(client, alice):
     assert b"987654321" not in resp.content
 
 
+@pytest.mark.django_db
+def test_unapproved_report_detail_is_private(client, alice, bob):
+    """SEC-1.3: unreviewed / rejected content must not be reachable by id."""
+    pending = make_report(alice, item="Pending Secret", status="pending")
+    rejected = make_report(alice, item="Rejected Secret", status="rejected")
+
+    assert client.get(reverse("report_detail", args=[pending.pk])).status_code == 404
+    assert client.get(reverse("report_detail", args=[rejected.pk])).status_code == 404
+
+    # The owner still sees their own report (they must be able to check it while pending).
+    client.force_login(alice)
+    resp = client.get(reverse("report_detail", args=[pending.pk]))
+    assert resp.status_code == 200
+    assert b"Pending Secret" in resp.content
+
+    # An unrelated signed-in user does not.
+    client.force_login(bob)
+    assert client.get(reverse("report_detail", args=[pending.pk])).status_code == 404
+
+
+@pytest.mark.django_db
+def test_service_staff_can_preview_pending_report(client, staff_user, alice):
+    report = make_report(alice, item="Queued Item", status="pending")
+    client.force_login(staff_user)
+    assert client.get(reverse("report_detail", args=[report.pk])).status_code == 200
+
+
+@pytest.mark.django_db
+def test_claimant_keeps_access_after_report_closes(client, alice, bob):
+    """A closed report stays visible to the user who claimed it (claim page links to it)."""
+    report = make_report(alice, status="approved")
+    make_claim(report, bob)
+    report.status = "closed"
+    report.save(update_fields=["status"])
+
+    assert client.get(reverse("report_detail", args=[report.pk])).status_code == 404
+    client.force_login(bob)
+    assert client.get(reverse("report_detail", args=[report.pk])).status_code == 200
+
+
 # ------------------------------------------------------------------ #
 # REQ-1.3 / 1.4: moderation and owner editing                         #
 # ------------------------------------------------------------------ #
