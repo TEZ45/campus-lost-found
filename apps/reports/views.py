@@ -191,7 +191,12 @@ def report_detail(request, pk):
     if not can_view_report(request.user, report):
         # 404 rather than 403 so a non-public report does not confirm its existence.
         raise Http404("Report not found")
-    matches = report.lost_matches.all() if report.report_type == "lost" else report.found_matches.all()
+    # Only surface pairs whose counterpart is still public (SEC-1.3).
+    if report.report_type == "lost":
+        matches = report.lost_matches.filter(found_report__status="approved")
+    else:
+        matches = report.found_matches.filter(lost_report__status="approved")
+    matches = matches.select_related("lost_report", "found_report")
     return render(request, "reports/detail.html", {"report": report, "matches": matches})
 
 
@@ -493,10 +498,22 @@ def staff_handover_action(request, pk):
 # --------------------------------------------------------------------- #
 
 def matches(request):
-    """Suggest candidate matches and list existing suggestions."""
+    """REQ-1.6 (Could): list suggested matches; regenerating them is a staff write.
+
+    Suggestions are derived from approved reports only, and a pair stays hidden once
+    either side stops being public so the page cannot leak rejected content.
+    """
     if request.method == "POST":
+        if not request.user.is_authenticated:
+            return redirect(f"/login/?next={request.path}")
+        if not _is_service_staff(request.user):
+            return render(request, "403.html", status=403)
         for report in Report.objects.filter(status="approved"):
             generate_matches(report)
         messages.success(request, "Match suggestions regenerated.")
-    matches_qs = Match.objects.select_related("lost_report", "found_report").order_by("-score")[:100]
+    matches_qs = (
+        Match.objects.filter(lost_report__status="approved", found_report__status="approved")
+        .select_related("lost_report", "found_report")
+        .order_by("-score")[:100]
+    )
     return render(request, "matches.html", {"matches": matches_qs})
