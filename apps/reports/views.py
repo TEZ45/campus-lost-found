@@ -311,7 +311,13 @@ def claim_withdraw(request, pk):
     return redirect("claim_detail", pk=claim.pk)
 
 
+@login_required
 def notices(request):
+    """REQ-1.13: in-app notices of the signed-in user.
+
+    Login is required here: filtering by ``request.user`` would otherwise raise on
+    AnonymousUser and answer 500 instead of redirecting to the login page.
+    """
     return render(request, "notices.html", {"notices": Notice.objects.filter(user=request.user)})
 
 
