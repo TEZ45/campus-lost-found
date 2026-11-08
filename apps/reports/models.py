@@ -3,6 +3,14 @@ from django.db import models, transaction
 from django.utils import timezone
 
 
+def _staff_actions(instance):
+    return [
+        {"key": key, "label": instance.ACTION_LABELS[key],
+         "reason": key in instance.REASON_REQUIRED}
+        for key in instance.STAFF_ACTIONS.get(instance.status, ())
+    ]
+
+
 class UserProfile(models.Model):
     """Business authorisation separate from Django admin/superuser status (URS SEC-1.3).
     Being a system administrator alone does NOT grant claim-evidence access;
@@ -32,6 +40,16 @@ class Report(models.Model):
         ("close_requested", "Closure Requested"),
         ("closed", "Closed / Resolved"),
     ]
+    STAFF_ACTIONS = {
+        "pending": ("approve", "reject"),
+        "close_requested": ("close",),
+    }
+    ACTION_LABELS = {
+        "approve": "Approve and publish",
+        "reject": "Reject",
+        "close": "Approve closure",
+    }
+    REASON_REQUIRED = {"reject"}
 
     report_type = models.CharField(max_length=10, choices=REPORT_TYPES)
     item_name = models.CharField(max_length=200)
@@ -56,6 +74,10 @@ class Report(models.Model):
 
     def is_public(self):
         return self.status == "approved"
+
+    @property
+    def staff_actions(self):
+        return _staff_actions(self)
 
     @property
     def reference(self):
@@ -91,6 +113,25 @@ class Claim(models.Model):
     # States that hold the exclusive reservation (DOM-3).
     RESERVED_STATES = ["awaiting_handover", "under_dispute", "handover_in_progress"]
     FINAL_STATES = ["completed", "rejected", "withdrawn", "invalidated"]
+    STAFF_ACTIONS = {
+        "pending": ("approve", "reject", "request_evidence"),
+        "awaiting_evidence": ("reject",),
+        "awaiting_handover": ("start_handover", "start_dispute"),
+        "under_dispute": ("resolve_keep", "resolve_reject"),
+        "handover_in_progress": ("complete_handover", "interrupt_handover"),
+    }
+    ACTION_LABELS = {
+        "approve": "Approve",
+        "reject": "Reject",
+        "request_evidence": "Request evidence",
+        "start_handover": "Start handover",
+        "start_dispute": "Start dispute review",
+        "resolve_keep": "Resolve - keep approval",
+        "resolve_reject": "Resolve - reject",
+        "complete_handover": "Complete handover",
+        "interrupt_handover": "Interrupt (safe)",
+    }
+    REASON_REQUIRED = {"reject", "resolve_reject", "interrupt_handover"}
 
     report = models.ForeignKey(Report, on_delete=models.CASCADE, related_name="claims")
     claimant = models.ForeignKey(
@@ -129,6 +170,10 @@ class Claim(models.Model):
     @property
     def holds_reservation(self):
         return self.status in self.RESERVED_STATES
+
+    @property
+    def staff_actions(self):
+        return _staff_actions(self)
 
     def reservation_conflict_exists(self):
         """DOM-3: at most one reserved claim across the reserved states."""

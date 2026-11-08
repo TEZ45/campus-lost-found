@@ -1,4 +1,3 @@
-from functools import wraps
 from urllib.parse import urlparse
 
 from django.contrib import messages
@@ -9,41 +8,8 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import ClaimForm, ReportForm, SearchForm
-from .models import ActionHistory, Claim, Match, Notice, Report, UserProfile
-
-# --------------------------------------------------------------------- #
-# Access control                                                        #
-# --------------------------------------------------------------------- #
-
-def _is_service_staff(user):
-    """URS REQ-1.1 / SEC-1.3: business authorisation for lost-property work.
-    Administrator status alone does NOT authorise this role."""
-    if not user.is_authenticated:
-        return False
-    profile = getattr(user, "profile", None)
-    if profile is None:
-        profile, _ = UserProfile.objects.get_or_create(user=user)
-    return profile.is_service_staff
-
-
-def staff_required(view):
-    """URS REQ-1.1 / SEC-1.3: service-staff authorisation only."""
-    @wraps(view)
-    def wrapper(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect(f"/login/?next={request.path}")
-        if not _is_service_staff(request.user):
-            return render(request, "403.html", status=403)
-        return view(request, *args, **kwargs)
-    return wrapper
-
-
-def can_read_evidence(user, claim):
-    """SEC-1.2: only the claimant and authorised staff may read claim evidence.
-    Administrator status alone does not authorise evidence access (SEC-1.3)."""
-    if claim.claimant is not None and user == claim.claimant:
-        return True
-    return _is_service_staff(user)
+from .models import ActionHistory, Claim, Match, Notice, Report
+from .permissions import can_read_evidence, is_service_staff, staff_required
 
 
 def log_history(action, actor, report=None, claim=None, prev="", new="", reason="", result=""):
@@ -145,7 +111,7 @@ def report_list(request):
     """REQ-1.5 Search: keyword + type / category / location / date / status."""
     form = SearchForm(request.GET or None)
     reports = Report.objects.all()
-    if not _is_service_staff(request.user):
+    if not is_service_staff(request.user):
         reports = reports.filter(status="approved")
     if form.is_valid():
         cd = form.cleaned_data
