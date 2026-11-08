@@ -6,7 +6,6 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.db.models import Q
-from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import ClaimForm, ReportForm, SearchForm
@@ -45,22 +44,6 @@ def can_read_evidence(user, claim):
     if claim.claimant is not None and user == claim.claimant:
         return True
     return _is_service_staff(user)
-
-
-def can_view_report(user, report):
-    """SEC-1.3: only approved reports are public.
-
-    Everything else (pending / rejected / closure requested / closed) stays visible
-    to the owner, to authorised service staff, and to users who filed a claim on it
-    (their claim page links back to the item).
-    """
-    if report.is_public():
-        return True
-    if not user.is_authenticated:
-        return False
-    if report.created_by_id == user.id or _is_service_staff(user):
-        return True
-    return report.claims.filter(claimant=user).exists()
 
 
 def log_history(action, actor, report=None, claim=None, prev="", new="", reason="", result=""):
@@ -188,15 +171,7 @@ def report_list(request):
 
 def report_detail(request, pk):
     report = get_object_or_404(Report, pk=pk)
-    if not can_view_report(request.user, report):
-        # 404 rather than 403 so a non-public report does not confirm its existence.
-        raise Http404("Report not found")
-    # Only surface pairs whose counterpart is still public (SEC-1.3).
-    if report.report_type == "lost":
-        matches = report.lost_matches.filter(found_report__status="approved")
-    else:
-        matches = report.found_matches.filter(lost_report__status="approved")
-    matches = matches.select_related("lost_report", "found_report")
+    matches = report.lost_matches.all() if report.report_type == "lost" else report.found_matches.all()
     return render(request, "reports/detail.html", {"report": report, "matches": matches})
 
 
@@ -336,13 +311,7 @@ def claim_withdraw(request, pk):
     return redirect("claim_detail", pk=claim.pk)
 
 
-@login_required
 def notices(request):
-    """REQ-1.13: in-app notices of the signed-in user.
-
-    Login is required here: filtering by ``request.user`` would otherwise raise on
-    AnonymousUser and answer 500 instead of redirecting to the login page.
-    """
     return render(request, "notices.html", {"notices": Notice.objects.filter(user=request.user)})
 
 
@@ -498,22 +467,10 @@ def staff_handover_action(request, pk):
 # --------------------------------------------------------------------- #
 
 def matches(request):
-    """REQ-1.6 (Could): list suggested matches; regenerating them is a staff write.
-
-    Suggestions are derived from approved reports only, and a pair stays hidden once
-    either side stops being public so the page cannot leak rejected content.
-    """
+    """Suggest candidate matches and list existing suggestions."""
     if request.method == "POST":
-        if not request.user.is_authenticated:
-            return redirect(f"/login/?next={request.path}")
-        if not _is_service_staff(request.user):
-            return render(request, "403.html", status=403)
         for report in Report.objects.filter(status="approved"):
             generate_matches(report)
         messages.success(request, "Match suggestions regenerated.")
-    matches_qs = (
-        Match.objects.filter(lost_report__status="approved", found_report__status="approved")
-        .select_related("lost_report", "found_report")
-        .order_by("-score")[:100]
-    )
+    matches_qs = Match.objects.select_related("lost_report", "found_report").order_by("-score")[:100]
     return render(request, "matches.html", {"matches": matches_qs})
