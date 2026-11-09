@@ -18,22 +18,12 @@
 
     <form method="post" action="{% url 'staff_report_review' report.pk %}" style="margin-top: 1rem;">
         {% csrf_token %}
-        {% if report.status == 'pending' %}
-            <input type="text" name="reason" placeholder="Reason (required for rejection)" style="width: 60%; padding: 0.4rem; margin-bottom: 0.5rem;">
-            <div>
-                <button type="submit" name="action" value="approve" class="btn btn-success">Approve & publish</button>
-                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
-            </div>
-        {% elif report.status == 'close_requested' %}
-            <div>
-                <button type="submit" name="action" value="close" class="btn btn-warning">Approve closure</button>
-            </div>
-        {% endif %}
+        {% include 'staff/actions.html' with actions=report.available_actions %}
     </form>
 </div>
 {% empty %}
 <div class="card"><p>No reports waiting for moderation.</p></div>
 {% endfor %}
 
-<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">← Back to dashboard</a>
+<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">Back to dashboard</a>
 {% endblock %}

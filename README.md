@@ -7,7 +7,7 @@ find possible matches, and submit claims for staff review.
 Implementation follows the *Campus Lost and Found System* User Requirements
 Specification (URS): accounts & roles, report moderation, search, private
 claims with an exclusive reservation, dispute review, physical handover,
-in-app notices and immutable action history. See
+in-app notices and append-only action history. See
 [the URS coverage matrix](docs/URS_%E9%9C%80%E6%B1%82%E8%A6%86%E7%9B%96%E7%9F%A9%E9%98%B5.md)
 for the requirement-by-requirement trace.
 
@@ -78,6 +78,19 @@ Tests use temporary media directories and a temporary SQLite file. Concurrent
 workflow tests use separate database connections. SQLite write transactions
 use `IMMEDIATE` mode; PostgreSQL deployment still needs separate validation.
 
+### API and business rules
+
+The JSON API is available at `/api/v1/`; see [the API contract](docs/api.md)
+for routes, fields, permissions, errors and session/CSRF handling.
+`services.py` handles writes for both HTML views and API views. Models retain
+the transaction-safe state transitions. Shared action definitions drive UI
+controls and server checks. A separate frontend can use the API; the existing
+Django templates remain available during that transition.
+
+Audit records reject application-level updates and deletes. Related users,
+reports and claims cannot be deleted while referenced by audit history.
+Database administrator access and raw SQL are outside these application rules.
+
 ## Project Structure
 
 ```
@@ -104,12 +117,12 @@ campus-lost-found/
 - Claim state model: pending -> evidence -> approval -> handover -> completed,
   with dispute review, withdrawal, invalidation and exclusive reservation
 - Physical handover recording (start / complete / safe interruption)
-- In-app notices for users and immutable action history for staff
+- In-app notices for users and append-only action history for staff
 - Suggested lost/found matches with reasons (never auto-approve claims)
 
 ## Tech Stack
 
-- Backend: Django; Django REST Framework installed for future API work
+- Backend: Django and Django REST Framework
 - Frontend: HTML templates with vanilla CSS/JS
 - Database: SQLite; PostgreSQL deployment is not configured yet
 - Package manager: uv

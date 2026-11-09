@@ -11,7 +11,10 @@
         {% if not notice.is_read %}<span class="badge badge-found">new</span>{% endif %}
     </p>
     {% if notice.body %}<p style="margin-top: 0.25rem;">{{ notice.body }}</p>{% endif %}
-    {% if notice.link %}<a href="{% url 'notice_read' notice.pk %}" style="display: inline-block; margin-top: 0.5rem;">View & mark read</a>{% endif %}
+    <form method="post" action="{% url 'notice_read' notice.pk %}" style="margin-top: 0.5rem;">
+        {% csrf_token %}
+        <button type="submit" class="btn">{% if notice.link %}View and mark read{% else %}Mark read{% endif %}</button>
+    </form>
 </div>
 {% empty %}
 <div class="card"><p>You have no notices yet.</p></div>

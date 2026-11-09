@@ -1,0 +1,10 @@
+{% if actions %}
+<input type="text" name="reason" placeholder="Reason when required" required style="width: 70%; padding: 0.4rem; margin-bottom: 0.5rem;">
+<div>
+    {% for action in actions %}
+    <button type="submit" name="action" value="{{ action.key }}" class="btn"{% if not action.reason %} formnovalidate{% endif %}>{{ action.label }}</button>
+    {% endfor %}
+</div>
+{% else %}
+<p>No actions are available in the current state.</p>
+{% endif %}

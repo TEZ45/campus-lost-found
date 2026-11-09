@@ -255,10 +255,10 @@ def test_report_attachment_single_image(client, alice):
 # ------------------------------------------------------------------ #
 
 @pytest.mark.django_db
-def test_matches_generation_and_reason(client, alice):
+def test_matches_generation_and_reason(client, alice, staff_user):
     lost = make_report(alice, report_type="lost", item="Black Wallet", category="Accessories")
     found = make_report(alice, report_type="found", item="Wallet Black", category="Accessories")
-    client.force_login(alice)
+    client.force_login(staff_user)
     client.post(reverse("matches"))
     match = Match.objects.filter(lost_report=lost, found_report=found).first()
     assert match is not None

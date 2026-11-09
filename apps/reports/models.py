@@ -46,6 +46,8 @@ class Report(models.Model):
     ]
     STAFF_ACTIONS = {
         "pending": ("approve", "reject"),
+        "approved": ("close",),
+        "rejected": ("close",),
         "close_requested": ("close",),
     }
     ACTION_LABELS = {
@@ -94,6 +96,8 @@ class Report(models.Model):
         with transaction.atomic():
             report = Report.objects.select_for_update().get(pk=self.pk)
             previous = report.status
+            if action not in report.STAFF_ACTIONS.get(previous, ()):
+                raise ValueError(f"{action} not allowed from {previous}")
             if action in ("approve", "reject"):
                 if previous != "pending":
                     raise ValueError("Only pending reports may be approved or rejected")
@@ -295,7 +299,8 @@ class Claim(models.Model):
     def reject(self, staff, reason):
         if not reason.strip():
             raise ValueError("Rejection requires a reason")
-        return self._apply("rejected", staff, "rejected", self.BEFORE_HANDOVER, reason, "Rejected")
+        return self._apply("rejected", staff, "rejected", ("pending", "awaiting_evidence"),
+                           reason, "Rejected")
 
     def start_dispute(self, staff, reason=""):
         return self._apply("under_dispute", staff, "dispute_started", ("awaiting_handover",), reason,
@@ -383,13 +388,35 @@ class Notice(models.Model):
         ordering = ["-created_at"]
 
 
+class ActionHistoryQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValueError("Action history is append-only")
+
+    def delete(self):
+        raise ValueError("Action history is append-only")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValueError("Action history is append-only")
+
+    def bulk_create(self, objs, batch_size=None, ignore_conflicts=False, update_conflicts=False,
+                    update_fields=None, unique_fields=None):
+        if update_conflicts:
+            raise ValueError("Action history is append-only")
+        return super().bulk_create(
+            objs, batch_size=batch_size, ignore_conflicts=ignore_conflicts,
+            update_conflicts=False, update_fields=update_fields, unique_fields=unique_fields,
+        )
+
+
 class ActionHistory(models.Model):
     """Immutable audit history of key actions (REQ-1.14, SEC-1.4)."""
 
-    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    objects = ActionHistoryQuerySet.as_manager()
+
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True)
     action = models.CharField(max_length=50)
-    claim = models.ForeignKey(Claim, on_delete=models.CASCADE, null=True, blank=True, related_name="history")
-    report = models.ForeignKey(Report, on_delete=models.CASCADE, null=True, blank=True, related_name="history")
+    claim = models.ForeignKey(Claim, on_delete=models.PROTECT, null=True, blank=True, related_name="history")
+    report = models.ForeignKey(Report, on_delete=models.PROTECT, null=True, blank=True, related_name="history")
     previous_state = models.CharField(max_length=25, blank=True, default="")
     new_state = models.CharField(max_length=25, blank=True, default="")
     reason = models.TextField(blank=True, default="")
@@ -398,6 +425,17 @@ class ActionHistory(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Action history is append-only")
+        kwargs["force_insert"] = True
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Action history is append-only")
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} {self.actor} {self.action}"

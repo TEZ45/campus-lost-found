@@ -1,7 +1,11 @@
+import warnings
+from pathlib import Path
+
 from django import forms
 from django.core.exceptions import ValidationError
+from PIL import Image
 
-from .models import Claim, ClaimAttachment, Report
+from .models import Claim, Report
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # CAP-3.1: 5 MB per image
 ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"]
@@ -12,17 +16,37 @@ MAX_IMAGES_PER_CLAIM = 5  # CAP-3.1
 def validate_image(image):
     if image.size > MAX_IMAGE_SIZE:
         raise ValidationError(f"Image exceeds the 5 MB limit ({image.size // 1024} KB).")
-    if image.content_type not in ALLOWED_IMAGE_TYPES:
+    content_type = getattr(image, "content_type", None)
+    if content_type not in ALLOWED_IMAGE_TYPES:
         raise ValidationError("Only JPG and PNG images are allowed.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            image.seek(0)
+            with Image.open(image) as decoded:
+                expected = {"JPEG": ("image/jpeg", {".jpg", ".jpeg"}),
+                            "PNG": ("image/png", {".png"})}.get(decoded.format)
+                if (
+                    not expected or content_type != expected[0]
+                    or Path(image.name).suffix.lower() not in expected[1]
+                ):
+                    raise ValidationError("The file type must match a JPG or PNG image.")
+                decoded.verify()
+            image.seek(0)
+            with Image.open(image) as decoded:
+                decoded.load()
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning) as exc:
+        raise ValidationError("Upload a complete, valid JPG or PNG image.") from exc
+    finally:
+        image.seek(0)
     return image
 
 
 class SingleImageField(forms.ImageField):
-    def clean(self, data, initial=None):
-        data = super().clean(data, initial)
-        if data in (None, "", False):
-            return data
-        return validate_image(data)
+    def to_python(self, data):
+        image = forms.FileField.to_python(self, data)
+        return validate_image(image) if image is not None else None
 
 
 class MultipleFileInput(forms.ClearableFileInput):
@@ -37,7 +61,6 @@ class MultipleImageField(forms.FileField):
         super().__init__(*args, **kwargs)
 
     def clean(self, data, initial=None):
-        single_clean = super().clean
         if isinstance(data, (list, tuple)):
             files = data
         elif data is None or data == "" or data is False:
@@ -47,17 +70,8 @@ class MultipleImageField(forms.FileField):
         files = [f for f in files if f]
         if len(files) > MAX_IMAGES_PER_SUBMISSION:
             raise ValidationError(f"At most {MAX_IMAGES_PER_SUBMISSION} images per submission.")
-        cleaned = []
-        for f in files:
-            cleaned_f = single_clean(f, initial)
-            if cleaned_f is None:
-                continue
-            if cleaned_f.content_type not in ALLOWED_IMAGE_TYPES:
-                raise ValidationError("Only JPG and PNG images are allowed.")
-            if cleaned_f.size > MAX_IMAGE_SIZE:
-                raise ValidationError(f"Image exceeds the 5 MB limit ({cleaned_f.size // 1024} KB).")
-            cleaned.append(cleaned_f)
-        return cleaned
+        field = SingleImageField(required=self.required)
+        return [field.clean(file) for file in files]
 
 
 class ReportForm(forms.ModelForm):
@@ -96,11 +110,6 @@ class ClaimForm(forms.ModelForm):
                     f"{MAX_IMAGES_PER_CLAIM} in total."
                 )
         return cleaned
-
-    def save_attachments(self, claim):
-        for image in self.cleaned_data.get("images") or []:
-            ClaimAttachment.objects.create(claim=claim, image=image)
-
 
 class SearchForm(forms.Form):
     q = forms.CharField(required=False, label="Keyword")

@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 
 def is_service_staff(user):
     """Service-staff authorisation; the admin flag alone does not grant it."""
-    if not user.is_authenticated or not user.is_active:
+    if not user or not user.is_authenticated or not user.is_active:
         return False
     profile = getattr(user, "profile", None)
     return bool(profile and profile.is_service_staff)
@@ -53,6 +53,7 @@ def can_claim(user, report):
     """Signed-in users claim approved, open found reports."""
     return (
         user.is_authenticated
+        and user.is_active
         and report.report_type == "found"
         and report.status == "approved"
     )
@@ -62,6 +63,7 @@ def can_withdraw(user, claim):
     """Claimant may withdraw only before the handover starts."""
     return (
         user.is_authenticated
+        and user.is_active
         and claim.claimant_id == user.id
         and claim.status in claim.BEFORE_HANDOVER
     )
@@ -71,6 +73,44 @@ def can_resubmit(user, claim):
     """Claimant may resubmit only while evidence is awaited."""
     return (
         user.is_authenticated
+        and user.is_active
         and claim.claimant_id == user.id
         and claim.status == "awaiting_evidence"
     )
+
+
+def report_actions(user, report):
+    actions = []
+    in_progress = report.claims.filter(status="handover_in_progress").exists()
+    if is_service_staff(user):
+        actions.extend(action for action in report.staff_actions
+                       if action["key"] != "close" or not in_progress)
+    if can_manage_report(user, report):
+        reserved = report.claims.filter(status__in=[
+            "awaiting_handover", "under_dispute", "handover_in_progress",
+        ]).exists()
+        if report.status not in ("closed", "close_requested") and not reserved:
+            actions.append({"key": "edit", "label": "Edit", "reason": False})
+        if report.status not in ("closed", "close_requested") and not in_progress:
+            actions.append({"key": "request_close", "label": "Request closure", "reason": False})
+    if can_claim(user, report):
+        actions.append({"key": "claim", "label": "Submit claim", "reason": False})
+    return actions
+
+
+def claim_actions(user, claim):
+    actions = []
+    if is_service_staff(user):
+        for action in claim.staff_actions:
+            if action["key"] in ("approve", "start_handover") and (
+                claim.report.status != "approved" or claim.report.report_type != "found"
+            ):
+                continue
+            if action["key"] == "approve" and claim.reservation_conflict_exists():
+                continue
+            actions.append(action)
+    if can_resubmit(user, claim):
+        actions.append({"key": "resubmit", "label": "Resubmit evidence", "reason": False})
+    if can_withdraw(user, claim):
+        actions.append({"key": "withdraw", "label": "Withdraw claim", "reason": False})
+    return actions

@@ -32,4 +32,4 @@ def test_reservation_migration_preserves_existing_conflicts():
         assert (first.status, second.status) == ("awaiting_handover", "under_dispute")
     finally:
         Claim.objects.filter(pk=second.pk).update(status="withdrawn")
-        MigrationExecutor(connection).migrate(current)
+        MigrationExecutor(connection).migrate([("reports", "0005_protect_action_history")])
