@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 
 def is_service_staff(user):
     """Service-staff authorisation; the admin flag alone does not grant it."""
-    if not user.is_authenticated:
+    if not user.is_authenticated or not user.is_active:
         return False
     profile = getattr(user, "profile", None)
     return bool(profile and profile.is_service_staff)
@@ -26,16 +26,16 @@ def staff_required(view):
 
 def can_read_evidence(user, claim):
     """Only the claimant and service staff may read claim evidence."""
-    if claim.claimant is not None and user == claim.claimant:
-        return True
-    return is_service_staff(user)
+    return user.is_authenticated and user.is_active and (
+        claim.claimant_id == user.id or is_service_staff(user)
+    )
 
 
 def can_view_report(user, report):
     """Approved reports are public; otherwise owner, staff or a claimant."""
     if report.is_public():
         return True
-    if not user.is_authenticated:
+    if not user.is_authenticated or not user.is_active:
         return False
     if report.created_by_id == user.id or is_service_staff(user):
         return True
@@ -44,7 +44,7 @@ def can_view_report(user, report):
 
 def can_manage_report(user, report):
     """Owner or service staff may edit a report or request its closure."""
-    if not user.is_authenticated:
+    if not user.is_authenticated or not user.is_active:
         return False
     return report.created_by_id == user.id or is_service_staff(user)
 

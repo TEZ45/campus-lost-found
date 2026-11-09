@@ -1,15 +1,26 @@
 from urllib.parse import urlparse
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.core.files.storage import FileSystemStorage
+from django.db import transaction
 from django.db.models import Q
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST, require_safe
 
 from .forms import ClaimForm, ReportForm, SearchForm
-from .models import ActionHistory, Claim, Match, Notice, Report
-from .permissions import can_read_evidence, is_service_staff, staff_required
+from .models import ActionHistory, Claim, ClaimAttachment, Match, Notice, Report
+from .permissions import (
+    can_manage_report,
+    can_read_evidence,
+    can_view_report,
+    is_service_staff,
+    staff_required,
+)
 
 
 def log_history(action, actor, report=None, claim=None, prev="", new="", reason="", result=""):
@@ -69,9 +80,6 @@ def register(request):
     else:
         form = UserCreationForm()
     return render(request, "register.html", {"form": form})
-
-
-from urllib.parse import urlparse
 
 
 def _safe_next(value):
@@ -137,8 +145,47 @@ def report_list(request):
 
 def report_detail(request, pk):
     report = get_object_or_404(Report, pk=pk)
+    if not can_view_report(request.user, report):
+        raise Http404
     matches = report.lost_matches.all() if report.report_type == "lost" else report.found_matches.all()
-    return render(request, "reports/detail.html", {"report": report, "matches": matches})
+    matches = matches.filter(lost_report__status="approved", found_report__status="approved")
+    return render(request, "reports/detail.html", {
+        "report": report, "matches": matches,
+        "can_manage_report": can_manage_report(request.user, report),
+    })
+
+
+@require_safe
+def report_photo(request, name):
+    report = get_object_or_404(Report, photo=name)
+    if not can_view_report(request.user, report):
+        raise Http404
+    try:
+        response = FileResponse(report.photo.open("rb"))
+    except FileNotFoundError:
+        raise Http404 from None
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+@require_safe
+def claim_attachment(request, pk):
+    attachment = get_object_or_404(ClaimAttachment.objects.select_related("claim"), pk=pk)
+    if not can_read_evidence(request.user, attachment.claim):
+        return render(request, "403.html", status=403)
+    try:
+        evidence = attachment.image.open("rb")
+    except FileNotFoundError:
+        # Legacy files remain private while the storage migration is pending.
+        try:
+            evidence = FileSystemStorage(location=settings.MEDIA_ROOT).open(attachment.image.name)
+        except FileNotFoundError:
+            raise Http404 from None
+    response = FileResponse(evidence, as_attachment=True, content_type="application/octet-stream")
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @login_required
@@ -159,11 +206,15 @@ def report_create(request):
 
 
 @login_required
+@transaction.atomic
 def report_edit(request, pk):
     """REQ-1.4: owners may edit; changed public content returns to pending review."""
-    report = get_object_or_404(Report, pk=pk)
-    if report.created_by != request.user and not request.user.is_staff:
+    report = get_object_or_404(Report.objects.select_for_update(), pk=pk)
+    if not can_manage_report(request.user, report):
         return render(request, "403.html", status=403)
+    if report.status == "closed" or report.claims.filter(status__in=Claim.RESERVED_STATES).exists():
+        messages.error(request, "Cannot edit a closed report or an item with a reservation.")
+        return redirect("report_detail", pk=pk)
     was_public = report.is_public()
     if request.method == "POST":
         form = ReportForm(request.POST, request.FILES, instance=report)
@@ -183,18 +234,23 @@ def report_edit(request, pk):
 
 
 @login_required
+@transaction.atomic
 def report_close_request(request, pk):
     """REQ-1.4 / 1.12: owner requests closure; staff approve (close request queue)."""
-    report = get_object_or_404(Report, pk=pk)
-    if report.created_by != request.user and not request.user.is_staff:
+    report = get_object_or_404(Report.objects.select_for_update(), pk=pk)
+    if not can_manage_report(request.user, report):
         return render(request, "403.html", status=403)
     if report.status == "closed":
         messages.warning(request, "This report is already closed.")
         return redirect("report_detail", pk=pk)
     if request.method == "POST":
+        if report.claims.filter(status="handover_in_progress").exists():
+            messages.error(request, "Cannot request closure while a handover is in progress.")
+            return redirect("report_detail", pk=pk)
+        previous = report.status
         report.status = "close_requested"
         report.save(update_fields=["status", "updated_at"])
-        log_history("close_requested", request.user, report=report, prev="", new="close_requested")
+        log_history("close_requested", request.user, report=report, prev=previous, new="close_requested")
         messages.success(request, "Closure requested. Staff will review it.")
         return redirect("report_detail", pk=pk)
     return render(request, "reports/confirm_close.html", {"report": report})
@@ -205,9 +261,10 @@ def report_close_request(request, pk):
 # --------------------------------------------------------------------- #
 
 @login_required
+@transaction.atomic
 def claim_create(request, report_pk):
     """REQ-1.7 / DOM-1: signed-in users claim approved, open found reports."""
-    report = get_object_or_404(Report, pk=report_pk, report_type="found")
+    report = get_object_or_404(Report.objects.select_for_update(), pk=report_pk, report_type="found")
     if report.status != "approved":
         messages.error(request, "Claims are only accepted for approved, open found-item reports.")
         return redirect("report_detail", pk=report.pk)
@@ -244,16 +301,22 @@ def claim_detail(request, pk):
 
 
 @login_required
+@transaction.atomic
 def claim_resubmit(request, pk):
     """REQ-1.8: awaiting_evidence -> pending with new evidence and attachments."""
     claim = get_object_or_404(Claim, pk=pk)
+    Report.objects.select_for_update().get(pk=claim.report_id)
+    claim = Claim.objects.select_for_update().get(pk=pk)
     if claim.claimant != request.user:
         return render(request, "403.html", status=403)
     if request.method == "POST":
-        form = ClaimForm(request.POST, request.FILES)
+        form = ClaimForm(request.POST, request.FILES, instance=claim)
         if form.is_valid():
-            claim.evidence = form.cleaned_data["evidence"]
-            claim.resubmit_evidence()
+            try:
+                claim.resubmit_evidence(form.cleaned_data["evidence"])
+            except ValueError as exc:
+                messages.error(request, f"Cannot resubmit: {exc}")
+                return redirect("claim_detail", pk=claim.pk)
             form.save_attachments(claim)
             messages.success(request, "Evidence resubmitted. Back to pending review.")
             return redirect("claim_detail", pk=claim.pk)
@@ -264,6 +327,7 @@ def claim_resubmit(request, pk):
 
 
 @login_required
+@require_POST
 def claim_withdraw(request, pk):
     """REQ-1.12: claimant may withdraw only before handover."""
     claim = get_object_or_404(Claim, pk=pk)
@@ -316,48 +380,16 @@ def staff_report_queue(request):
 
 
 @staff_required
+@require_POST
 def staff_report_review(request, pk):
     report = get_object_or_404(Report, pk=pk)
     action = request.POST.get("action")
     reason = request.POST.get("reason", "").strip()
-    if action == "approve":
-        report.status = "approved"
-        report.save(update_fields=["status", "updated_at"])
-        log_history("report_approved", request.user, report=report,
-                    prev="pending", new="approved", reason=reason)
-        if report.created_by:
-            Notice.objects.create(user=report.created_by,
-                                  title=f"Report {report.reference} approved",
-                                  body=reason or "Your report is now public.",
-                                  link=f"/report/{report.pk}/")
-        messages.success(request, "Report approved and published.")
-    elif action == "reject":
-        if not reason:
-            messages.error(request, "A rejection reason is required.")
-            return redirect("staff_report_queue")
-        report.status = "rejected"
-        report.save(update_fields=["status", "updated_at"])
-        log_history("report_rejected", request.user, report=report,
-                    prev="pending", new="rejected", reason=reason)
-        if report.created_by:
-            Notice.objects.create(user=report.created_by,
-                                  title=f"Report {report.reference} rejected",
-                                  body=f"Reason: {reason}", link=f"/report/{report.pk}/")
-        messages.success(request, "Report rejected.")
-    elif action == "close":
-        # REQ-1.12: verified report cancellation invalidates before-handover claims.
-        # Handover in Progress cannot be ended through report cancellation (REQ-1.11).
-        if report.claims.filter(status="handover_in_progress").exists():
-            messages.error(request, "Cannot close: a handover is in progress for this report.")
-            return redirect("staff_report_queue")
-        for claim in report.claims.filter(status__in=Claim.BEFORE_HANDOVER):
-            claim.invalidate(request.user, "Report closed by staff")
-        report.status = "closed"
-        report.save(update_fields=["status", "updated_at"])
-        log_history("report_closed", request.user, report=report, prev="", new="closed", reason=reason)
-        messages.success(request, "Report closed.")
-    else:
-        messages.error(request, "Unknown action.")
+    try:
+        report.review(request.user, action, reason)
+        messages.success(request, f"Report {report.status}.")
+    except ValueError as exc:
+        messages.error(request, f"Action failed: {exc}")
     return redirect("staff_report_queue")
 
 
@@ -368,6 +400,7 @@ def staff_claim_queue(request):
 
 
 @staff_required
+@require_POST
 def staff_claim_review(request, pk):
     claim = get_object_or_404(Claim, pk=pk)
     action = request.POST.get("action")
@@ -398,6 +431,7 @@ def staff_handover_queue(request):
 
 
 @staff_required
+@require_POST
 def staff_handover_action(request, pk):
     claim = get_object_or_404(Claim, pk=pk)
     action = request.POST.get("action")
@@ -438,5 +472,7 @@ def matches(request):
         for report in Report.objects.filter(status="approved"):
             generate_matches(report)
         messages.success(request, "Match suggestions regenerated.")
-    matches_qs = Match.objects.select_related("lost_report", "found_report").order_by("-score")[:100]
+    matches_qs = Match.objects.filter(
+        lost_report__status="approved", found_report__status="approved",
+    ).select_related("lost_report", "found_report").order_by("-score")[:100]
     return render(request, "matches.html", {"matches": matches_qs})

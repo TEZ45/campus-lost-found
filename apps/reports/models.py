@@ -1,6 +1,10 @@
 from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.utils import timezone
+
+from .permissions import is_service_staff
+from .storage import PrivateEvidenceStorage
 
 
 def _staff_actions(instance):
@@ -83,6 +87,42 @@ class Report(models.Model):
     def reference(self):
         return f"RPT-{self.pk:06d}"
 
+    def review(self, staff, action, reason=""):
+        if not is_service_staff(staff):
+            raise PermissionDenied
+        reason = reason.strip()
+        with transaction.atomic():
+            report = Report.objects.select_for_update().get(pk=self.pk)
+            previous = report.status
+            if action in ("approve", "reject"):
+                if previous != "pending":
+                    raise ValueError("Only pending reports may be approved or rejected")
+                if action == "reject" and not reason:
+                    raise ValueError("A rejection reason is required")
+                report.status = "approved" if action == "approve" else "rejected"
+            elif action == "close":
+                if previous == "closed":
+                    raise ValueError("This report is already closed")
+                if report.claims.filter(status="handover_in_progress").exists():
+                    raise ValueError("Cannot close: a handover is in progress for this report")
+                for claim in report.claims.filter(status__in=Claim.BEFORE_HANDOVER):
+                    claim.invalidate(staff, "Report closed by staff")
+                report.status = "closed"
+            else:
+                raise ValueError("Unknown action")
+            report.save(update_fields=["status", "updated_at"])
+            ActionHistory.objects.create(
+                actor=staff, action=f"report_{report.status}", report=report,
+                previous_state=previous, new_state=report.status, reason=reason,
+            )
+            if report.created_by_id:
+                Notice.objects.create(
+                    user_id=report.created_by_id, title=f"Report {report.reference} {report.status}",
+                    body=reason or f"Your report is now {report.status}.",
+                    link=f"/report/{report.pk}/",
+                )
+        self.refresh_from_db()
+
 
 class Claim(models.Model):
     """A claim for a found item, implementing the URS claim state model.
@@ -159,6 +199,15 @@ class Claim(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["report"],
+                condition=models.Q(status__in=[
+                    "awaiting_handover", "under_dispute", "handover_in_progress",
+                ]),
+                name="one_reserved_claim_per_report",
+            ),
+        ]
 
     def __str__(self):
         return f"Claim for {self.report.item_name} by {self.claimant_name} ({self.get_status_display()})"
@@ -183,16 +232,24 @@ class Claim(models.Model):
             .exists()
         )
 
-    # ------------------------------------------------------------------ #
-    # Shared transition machinery.                                       #
-    # ------------------------------------------------------------------ #
-
-    def _apply(self, new_status, actor, action, reason="", result="", extras=None):
-        """Apply a state change inside a transaction: guard, save, history, notice."""
+    def _apply(self, new_status, actor, action, allowed_from, reason="", result="", extras=None):
         with transaction.atomic():
+            # All claim and report writes take the report lock first.
+            report = Report.objects.select_for_update().get(pk=self.report_id)
             locked = Claim.objects.select_for_update().get(pk=self.pk)
-            if new_status not in self.FINAL_STATES and locked.status in self.FINAL_STATES:
-                raise ValueError(f"Cannot move final state {locked.status} to {new_status}")
+            if action in ("withdrawn", "evidence_resubmitted"):
+                if not actor or not actor.is_active or locked.claimant_id != actor.pk:
+                    raise PermissionDenied
+            elif not is_service_staff(actor):
+                raise PermissionDenied
+            if locked.status not in allowed_from:
+                raise ValueError(f"{action} not allowed from {locked.status}")
+            if action in ("approved", "handover_started") and (
+                report.status != "approved" or report.report_type != "found"
+            ):
+                raise ValueError("Report must be approved and open for this action")
+            if new_status in self.RESERVED_STATES and locked.reservation_conflict_exists():
+                raise ValueError("Another claim already holds the reservation")
             old_status = locked.status
             locked.status = new_status
             if actor is not None:
@@ -202,6 +259,11 @@ class Claim(models.Model):
                 setattr(locked, field, value)
             locked.save(update_fields=["status", "reviewed_by", "reviewed_at",
                                        "updated_at"] + list((extras or {}).keys()))
+            if new_status == "completed":
+                for other in report.claims.filter(status__in=self.BEFORE_HANDOVER):
+                    other.invalidate(actor, "Found-item report completed")
+                report.status = "closed"
+                report.save(update_fields=["status", "updated_at"])
             ActionHistory.objects.create(
                 actor=actor, action=action, claim=locked, report=locked.report,
                 previous_state=old_status, new_state=new_status,
@@ -217,113 +279,67 @@ class Claim(models.Model):
         self.refresh_from_db()
         return self
 
-    # ------------------------------------------------------------------ #
-    # Transitions.                                                       #
-    # ------------------------------------------------------------------ #
-
     def request_evidence(self, staff, reason):
-        """REQ-1.8: staff asks for more evidence. pending -> awaiting_evidence."""
-        if self.status != "pending":
-            raise ValueError(f"request_evidence only from pending, got {self.status}")
-        return self._apply("awaiting_evidence", staff, "evidence_requested", reason,
+        return self._apply("awaiting_evidence", staff, "evidence_requested", ("pending",), reason,
                            "Additional evidence requested")
 
-    def resubmit_evidence(self):
-        """REQ-1.8: valid resubmission. awaiting_evidence -> pending."""
-        if self.status != "awaiting_evidence":
-            raise ValueError(f"resubmit only from awaiting_evidence, got {self.status}")
+    def resubmit_evidence(self, evidence=None):
         return self._apply("pending", self.claimant, "evidence_resubmitted",
-                           "", "Evidence resubmitted")
+                           ("awaiting_evidence",), result="Evidence resubmitted",
+                           extras={"evidence": evidence} if evidence is not None else None)
 
     def approve(self, staff, reason=""):
-        """REQ-1.9 / DOM-3: approval needs no existing reservation."""
-        if self.status != "pending":
-            raise ValueError(f"approve only from pending, got {self.status}")
-        if self.report.status != "approved":
-            raise ValueError("Report must be approved and open to approve a claim")
-        if self.reservation_conflict_exists():
-            raise ValueError("Another claim already holds the reservation")
-        return self._apply("awaiting_handover", staff, "approved",
+        return self._apply("awaiting_handover", staff, "approved", ("pending",),
                            reason, "Approved, awaiting handover")
 
     def reject(self, staff, reason):
-        """REQ-1.8: rejection requires a reason."""
-        if self.status not in ("pending", "awaiting_evidence", "awaiting_handover", "under_dispute"):
-            raise ValueError(f"reject not allowed from {self.status}")
-        if not reason:
+        if not reason.strip():
             raise ValueError("Rejection requires a reason")
-        return self._apply("rejected", staff, "rejected", reason, "Rejected")
+        return self._apply("rejected", staff, "rejected", self.BEFORE_HANDOVER, reason, "Rejected")
 
     def start_dispute(self, staff, reason=""):
-        """REQ-1.10: suspend collection, retain reservation."""
-        if self.status != "awaiting_handover":
-            raise ValueError(f"start_dispute only from awaiting_handover, got {self.status}")
-        return self._apply("under_dispute", staff, "dispute_started", reason,
+        return self._apply("under_dispute", staff, "dispute_started", ("awaiting_handover",), reason,
                            "Under dispute review, collection paused")
 
     def resolve_dispute(self, staff, approve, reason=""):
-        """REQ-1.10: resolve keeps approval (-> awaiting_handover) or rejects."""
-        if self.status != "under_dispute":
-            raise ValueError(f"resolve_dispute only from under_dispute, got {self.status}")
         if approve:
-            return self._apply("awaiting_handover", staff, "dispute_resolved", reason,
+            return self._apply("awaiting_handover", staff, "dispute_resolved", ("under_dispute",), reason,
                                "Dispute resolved, awaiting handover")
-        if not reason:
+        if not reason.strip():
             raise ValueError("Rejection after dispute requires a reason")
-        return self._apply("rejected", staff, "dispute_rejected", reason, "Dispute rejected")
+        return self._apply("rejected", staff, "dispute_rejected", ("under_dispute",), reason,
+                           "Dispute rejected")
 
     def start_handover(self, staff):
-        """REQ-1.11 / DOM-4: record start before releasing the item."""
-        if self.status != "awaiting_handover":
-            raise ValueError(f"start_handover only from awaiting_handover, got {self.status}")
-        return self._apply("handover_in_progress", staff, "handover_started", "",
+        return self._apply("handover_in_progress", staff, "handover_started", ("awaiting_handover",), "",
                            "Handover in progress", extras={"handover_started_by": staff,
                                                             "handover_started_at": timezone.now()})
 
     def complete_handover(self, staff):
-        """REQ-1.11-1.12 / DOM-5: close report, invalidate other before-handover claims."""
-        if self.status != "handover_in_progress":
-            raise ValueError(f"complete_handover only from handover_in_progress, got {self.status}")
-        with transaction.atomic():
-            locked = Claim.objects.select_for_update().get(pk=self.pk)
-            other_before = locked.report.claims.filter(status__in=self.BEFORE_HANDOVER).exclude(pk=locked.pk)
-            for other in other_before:
-                other._apply("invalidated", staff, "invalidated",
-                             "Found-item report completed", "Invalidated after completion")
-            locked.report.status = "closed"
-            locked.report.save(update_fields=["status", "updated_at"])
-            self._apply("completed", staff, "handover_completed", "",
-                        "Handover completed", extras={"handover_completed_by": staff,
-                                                       "handover_completed_at": timezone.now()})
-        return self
+        return self._apply("completed", staff, "handover_completed", ("handover_in_progress",), "",
+                           "Handover completed", extras={"handover_completed_by": staff,
+                                                        "handover_completed_at": timezone.now()})
 
     def interrupt_handover(self, staff, reason):
-        """REQ-1.11 / A4: safe interruption after staff confirms item not handed over."""
-        if self.status != "handover_in_progress":
-            raise ValueError(f"interrupt_handover only from handover_in_progress, got {self.status}")
-        if not reason:
+        if not reason.strip():
             raise ValueError("Interruption requires staff confirmation")
-        return self._apply("awaiting_handover", staff, "handover_interrupted", reason,
-                           "Interrupted safely, awaiting handover")
+        return self._apply("awaiting_handover", staff, "handover_interrupted",
+                           ("handover_in_progress",), reason, "Interrupted safely, awaiting handover")
 
     def withdraw(self, user):
-        """REQ-1.12: only before handover."""
-        if self.status not in self.BEFORE_HANDOVER:
-            raise ValueError(f"withdraw not allowed from {self.status}")
-        return self._apply("withdrawn", user, "withdrawn", "", "Withdrawn by claimant")
+        return self._apply("withdrawn", user, "withdrawn", self.BEFORE_HANDOVER,
+                           result="Withdrawn by claimant")
 
     def invalidate(self, staff, reason):
-        """REQ-1.12: verified report cancellation invalidates before-handover claims."""
-        if self.status not in self.BEFORE_HANDOVER:
-            raise ValueError(f"invalidate not allowed from {self.status}")
-        return self._apply("invalidated", staff, "invalidated", reason, "Invalidated")
+        return self._apply("invalidated", staff, "invalidated", self.BEFORE_HANDOVER,
+                           reason, "Invalidated")
 
 
 class ClaimAttachment(models.Model):
     """Evidence images for a claim (CAP-3.1: up to 3 per submission, 5 total, JPG/PNG, 5 MB)."""
 
     claim = models.ForeignKey(Claim, on_delete=models.CASCADE, related_name="attachments")
-    image = models.ImageField(upload_to="claims/")
+    image = models.ImageField(upload_to="claims/", storage=PrivateEvidenceStorage())
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
