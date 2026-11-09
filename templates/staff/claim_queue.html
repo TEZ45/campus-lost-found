@@ -7,12 +7,12 @@
 
 {% for claim in claims %}
 <div class="card">
-    <h3 style="margin-bottom: 0.25rem;">Claim {{ claim.reference }} — {{ claim.report.item_name }} ({{ claim.report.reference }})</h3>
+    <h3 style="margin-bottom: 0.25rem;">Claim {{ claim.reference }} - {{ claim.report.item_name }} ({{ claim.report.reference }})</h3>
     <p class="meta">Claimant: {{ claim.claimant_name }} ({{ claim.claimant_email }}) | Status: {{ claim.get_status_display }}</p>
     <hr style="margin: 0.75rem 0;">
     <p><strong>Evidence:</strong> {{ claim.evidence }}</p>
     {% for att in claim.attachments.all %}
-    <img src="{{ att.image.url }}" alt="Evidence" style="max-width: 180px; margin: 0.5rem 0.5rem 0 0; border-radius: 4px;">
+    <a href="{% url 'claim_attachment' att.pk %}">Download evidence</a>
     {% endfor %}
 
     <form method="post" action="{% url 'staff_claim_review' claim.pk %}" style="margin-top: 1rem;">
@@ -34,5 +34,5 @@
 <div class="card"><p>No claims waiting for review.</p></div>
 {% endfor %}
 
-<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">← Back to dashboard</a>
+<a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">Back to dashboard</a>
 {% endblock %}

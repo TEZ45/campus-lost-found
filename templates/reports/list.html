@@ -32,7 +32,7 @@
                 <label for="id_date_to">Date to</label>
                 {{ form.date_to }}
             </div>
-            {% if user.is_authenticated and user.is_staff %}
+            {% if is_service_staff %}
             <div class="form-group">
                 <label for="id_status">Status</label>
                 {{ form.status }}

@@ -17,6 +17,7 @@ urlpatterns = [
     path("claim/<int:pk>/", views.claim_detail, name="claim_detail"),
     path("claim/<int:pk>/resubmit/", views.claim_resubmit, name="claim_resubmit"),
     path("claim/<int:pk>/withdraw/", views.claim_withdraw, name="claim_withdraw"),
+    path("claim/attachment/<int:pk>/", views.claim_attachment, name="claim_attachment"),
     # Notices
     path("notices/", views.notices, name="notices"),
     path("notice/<int:pk>/read/", views.notice_read, name="notice_read"),

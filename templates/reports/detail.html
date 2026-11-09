@@ -28,7 +28,7 @@
             {% endif %}
         {% endif %}
 
-        {% if user.is_authenticated and report.created_by == user %}
+        {% if can_manage_report %}
             <a href="{% url 'report_edit' report.pk %}" class="btn" style="margin-left: 0.5rem;">Edit</a>
             {% if report.status != 'closed' and report.status != 'close_requested' %}
             <a href="{% url 'report_close_request' report.pk %}" class="btn btn-warning" style="margin-left: 0.5rem;">Request Closure</a>
@@ -41,7 +41,7 @@
 <h2 style="margin: 1rem 0 0.5rem;">Suggested matches</h2>
 {% for match in matches %}
 <div class="card">
-    <p><strong>{{ match.lost_report.item_name }}</strong> ↔ <strong>{{ match.found_report.item_name }}</strong>
+    <p><strong>{{ match.lost_report.item_name }}</strong> - <strong>{{ match.found_report.item_name }}</strong>
         <span class="badge badge-status">score {{ match.score|floatformat:0 }}%</span></p>
     {% if match.reason %}<p class="meta">Reason: {{ match.reason }}</p>{% endif %}
     <p class="meta">A suggested match never proves ownership (a staff member verifies claims separately).</p>
@@ -49,5 +49,5 @@
 {% endfor %}
 {% endif %}
 
-<a href="/" style="display: inline-block; margin-top: 1rem;">← Back to all reports</a>
+<a href="/" style="display: inline-block; margin-top: 1rem;">Back to all reports</a>
 {% endblock %}
