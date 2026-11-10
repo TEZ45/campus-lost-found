@@ -2,7 +2,8 @@
 
 Date: 2026-11-09. Branch: `fix/p1-backend`.
 Base: `6a3d847d21f3e1c4f1b6614bea2ab23e0da22f6f`.
-Changes remain local. No merge or push was performed.
+At this validation checkpoint, changes were local and had not been merged
+or pushed. Git history records subsequent publication.
 
 ## Completed
 
@@ -71,3 +72,24 @@ local loopback access. No external service was used.
 
 No browser visual review, load test, production deployment or external
 frontend integration test was performed.
+
+## Review with URS P0 on 2026-11-10
+
+Retain the P1 implementation in `ab3724a`. URS P0 in `ad31a8e` depends on its
+shared services, API, staff action controls and migration 0005. P0 corrects
+notification failure handling and requires explicit handover confirmations.
+The combined implementation passed 465 tests; see [P0 validation](urs-p0-validation.md).
+This publication review changes documentation only and does not rerun that suite.
+
+The earlier P1 label does not mean all P1 work identified by the later URS
+review is complete. Disputed evidence submission, remaining decision reasons,
+Issue 1 model requirements, retention and storage quotas remain tracked work.
+
+The root `api.md` added on remote main at `bd464f6` describes `/api` routes,
+different input names and response envelopes. This branch implements the
+`/api/v1/` contract in `docs/api.md`. These contracts are not interchangeable.
+Agree the frontend contract and update documentation and integration tests
+before merging; pushing this development branch does not resolve that choice.
+
+Publish P1 and P0 together to `fix/urs-p0` for review. Keep main unchanged.
+This is not full URS acceptance or approval for production deployment.

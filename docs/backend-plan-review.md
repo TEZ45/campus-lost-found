@@ -8,7 +8,7 @@ and acceptance checks A1 to A6. Issue 1 covers basic models and migrations.
 
 This is a proposed implementation plan and risk review, not an implementation
 or release approval. Existing commits remain intact. The reviewed P1 commit
-is local and has not been merged into main or pushed. An independent code
+was local and had not been merged into main or pushed at review time. An independent code
 review needs a source snapshot of this exact commit and the original URS;
 the remote main branch alone is not the reviewed baseline.
 
