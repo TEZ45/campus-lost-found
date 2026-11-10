@@ -5,14 +5,16 @@ from rest_framework.test import APIClient
 
 from apps.reports.models import Claim, ClaimAttachment, Notice, Report
 
-from .test_workflow import make_claim, make_png_bytes, make_report
+from .test_workflow import CONFIRMATIONS, make_claim, make_png_bytes, make_report
 
 pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
 def api_client():
-    return APIClient()
+    client = APIClient()
+    client.default_format = "json"
+    return client
 
 
 def url(name, *args):
@@ -114,7 +116,9 @@ def test_claim_workflow_through_api(api_client, users):
     api_client.force_login(users["service"])
     for action, status in [("approve", "awaiting_handover"), ("start_handover", "handover_in_progress"),
                            ("complete_handover", "completed")]:
-        response = api_client.post(url("claim-action", claim.pk), {"action": action})
+        response = api_client.post(url("claim-action", claim.pk), {
+            "action": action, "confirmations": CONFIRMATIONS[action],
+        })
         assert response.status_code == 200
         assert response.json()["status"] == status
     assert api_client.post(url("claim-action", claim.pk), {"action": "complete_handover"}).status_code == 409
@@ -129,24 +133,29 @@ def test_api_dispute_resolution_and_safe_interruption(api_client, users, resolut
     api_client.force_login(users["service"])
     action_url = url("claim-action", claim.pk)
     for action, status in [("approve", "awaiting_handover"), ("start_dispute", "under_dispute")]:
-        response = api_client.post(action_url, {"action": action})
+        response = api_client.post(action_url, {"action": action, "confirmations": CONFIRMATIONS[action]})
         assert response.status_code == 200
         assert response.json()["status"] == status
     if resolution == "resolve_reject":
         missing_reason = api_client.post(action_url, {"action": resolution})
         assert missing_reason.status_code == 400
         assert "reason" in missing_reason.json()["error"]["details"]
-    resolved = api_client.post(action_url, {"action": resolution, "reason": "Evidence reviewed"})
+    resolved = api_client.post(action_url, {
+        "action": resolution, "reason": "Evidence reviewed", "confirmations": CONFIRMATIONS[resolution],
+    })
     assert resolved.status_code == 200
     if resolution == "resolve_keep":
         assert resolved.json()["status"] == "awaiting_handover"
-        assert api_client.post(action_url, {"action": "start_handover"}).json()["status"] == "handover_in_progress"
+        assert api_client.post(action_url, {
+            "action": "start_handover", "confirmations": CONFIRMATIONS["start_handover"],
+        }).json()["status"] == "handover_in_progress"
         missing_reason = api_client.post(action_url, {"action": "interrupt_handover"})
         assert missing_reason.status_code == 400
         claim.refresh_from_db()
         assert claim.status == "handover_in_progress"
         interrupted = api_client.post(action_url, {
             "action": "interrupt_handover", "reason": "Item recovered; no transfer occurred",
+            "confirmations": {"safe_outcome": "recovered"},
         })
         assert interrupted.status_code == 200
         assert interrupted.json()["status"] == "awaiting_handover"

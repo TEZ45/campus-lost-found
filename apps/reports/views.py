@@ -9,6 +9,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST, require_safe
 
 from . import services
+from .confirmations import FIELDS
 from .forms import ClaimForm, ReportForm, SearchForm
 from .models import Claim, Notice, Report
 from .permissions import (
@@ -310,7 +311,12 @@ def claim_action(request, pk, destination):
         messages.error(request, "Unknown action.")
     else:
         try:
-            services.act_on_claim(request.user, pk, action, request.POST.get("reason", ""))
+            confirmations = {
+                key: request.POST[key] if key == "safe_outcome" else request.POST[key] in ("on", "true")
+                for key in FIELDS if key in request.POST
+            }
+            services.act_on_claim(request.user, pk, action, request.POST.get("reason", ""),
+                                  confirmations=confirmations)
             messages.success(request, "Action completed.")
         except (ValueError, ValidationError) as exc:
             messages.error(request, f"Action failed: {exc}")

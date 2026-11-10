@@ -44,6 +44,10 @@ class ActionInput(StrictSerializer):
     reason = serializers.CharField(required=False, allow_blank=True, default="")
 
 
+class ClaimActionInput(ActionInput):
+    confirmations = serializers.DictField(required=False, default=dict)
+
+
 class LoginInput(StrictSerializer):
     username = serializers.CharField(max_length=150)
     password = serializers.CharField(trim_whitespace=False, write_only=True)
@@ -89,7 +93,7 @@ class HistoryOutput(serializers.ModelSerializer):
         model = ActionHistory
         fields = [
             "id", "actor", "report", "claim", "action", "previous_state", "new_state",
-            "reason", "result", "created_at",
+            "reason", "result", "confirmations", "created_at",
         ]
 
 

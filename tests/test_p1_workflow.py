@@ -122,7 +122,7 @@ def test_staff_template_and_service_share_claim_actions(client, users):
     assert b'value="reject"' in response.content
     assert {item["key"] for item in claim_actions(users["service"], claim)} == {"reject"}
     with pytest.raises(ValueError):
-        services.act_on_claim(users["service"], claim.pk, "approve")
+        services.act_on_claim(users["service"], claim.pk, "approve", confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     with pytest.raises(ValidationError):
         services.act_on_claim(users["service"], claim.pk, "reject", " ")
     claim.refresh_from_db()
@@ -133,10 +133,10 @@ def test_reserved_report_action_contract_blocks_edit_and_second_approval(users):
     report = make_report(users["owner"])
     first = make_claim(report, users["claimant"])
     second = make_claim(report, users["other"])
-    services.act_on_claim(users["service"], first.pk, "approve")
+    services.act_on_claim(users["service"], first.pk, "approve", confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     assert "edit" not in {item["key"] for item in report_actions(users["owner"], report)}
     assert "approve" not in {item["key"] for item in claim_actions(users["service"], second)}
-    services.act_on_claim(users["service"], first.pk, "start_handover")
+    services.act_on_claim(users["service"], first.pk, "start_handover", confirmations={'identity_verified': True, 'custody_confirmed': True})
     assert "close" not in {item["key"] for item in report_actions(users["service"], report)}
     assert "request_close" not in {item["key"] for item in report_actions(users["owner"], report)}
 

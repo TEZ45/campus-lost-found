@@ -9,6 +9,7 @@ from django.db.models.fields.files import FieldFile
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 
+from .confirmations import REQUIRED
 from .forms import MAX_IMAGES_PER_CLAIM, MAX_IMAGES_PER_SUBMISSION, ReportForm, validate_image
 from .models import ActionHistory, Claim, ClaimAttachment, Match, Notice, Report
 from .permissions import (
@@ -194,7 +195,7 @@ def review_report(actor, report_id, action, reason=""):
 
 
 @transaction.atomic
-def act_on_claim(actor, claim_id, action, reason=""):
+def act_on_claim(actor, claim_id, action, reason="", confirmations=None):
     require_user(actor)
     claim = locked_claim(claim_id)
     if action == "withdraw":
@@ -203,12 +204,18 @@ def act_on_claim(actor, claim_id, action, reason=""):
     else:
         require_staff(actor)
     require_action(claim_actions(actor, claim), action, reason)
+    if action not in REQUIRED and confirmations:
+        raise ValidationError({"confirmations": "This action does not accept confirmations."})
     if action in ("resolve_keep", "resolve_reject"):
-        return claim.resolve_dispute(actor, action == "resolve_keep", reason)
-    if action in ("approve", "reject", "request_evidence", "start_dispute", "interrupt_handover"):
+        return claim.resolve_dispute(actor, action == "resolve_keep", reason, confirmations=confirmations)
+    if action in ("approve", "start_dispute", "interrupt_handover"):
+        return getattr(claim, action)(actor, reason, confirmations=confirmations)
+    if action in ("start_handover", "complete_handover"):
+        return getattr(claim, action)(actor, confirmations=confirmations)
+    if action in ("reject", "request_evidence"):
         return getattr(claim, action)(actor, reason)
-    if action in ("withdraw", "start_handover", "complete_handover"):
-        return getattr(claim, action)(actor)
+    if action == "withdraw":
+        return claim.withdraw(actor)
     raise ValueError("Unknown action")
 
 

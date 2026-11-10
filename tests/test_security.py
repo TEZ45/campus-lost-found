@@ -10,6 +10,7 @@ from django.db import IntegrityError, transaction
 from django.urls import reverse
 
 from apps.reports.models import ActionHistory, Claim, ClaimAttachment, Match, Notice
+from apps.reports.notifications import deliver_pending
 
 from .test_workflow import make_claim, make_png_bytes, make_report
 
@@ -150,7 +151,7 @@ def test_model_operations_enforce_actor_permissions(users):
     claim = make_claim(report, users["claimant"])
     for role in ("owner", "other", "admin"):
         with pytest.raises(PermissionDenied):
-            claim.approve(users[role])
+            claim.approve(users[role], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
         with pytest.raises(PermissionDenied):
             claim.withdraw(users[role])
         with pytest.raises(PermissionDenied):
@@ -169,9 +170,9 @@ def test_database_rejects_second_reservation(users, status):
 @pytest.mark.parametrize("action", ["withdraw", "reject", "invalidate", "start_dispute"])
 def test_stale_claim_cannot_override_handover(users, action):
     claim = make_claim(make_report(users["owner"]), users["claimant"])
-    claim.approve(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     stale = Claim.objects.get(pk=claim.pk)
-    claim.start_handover(users["service"])
+    claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
     actor = users["claimant"] if action == "withdraw" else users["service"]
     args = (actor,) if action == "withdraw" else (actor, "reason")
     with pytest.raises(ValueError):
@@ -183,14 +184,14 @@ def test_stale_claim_cannot_override_handover(users, action):
 
 def test_stale_completion_cannot_repeat_or_undo_completion(users):
     claim = make_claim(make_report(users["owner"]), users["claimant"])
-    claim.approve(users["service"])
-    claim.start_handover(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
     stale = Claim.objects.get(pk=claim.pk)
-    claim.complete_handover(users["service"])
+    claim.complete_handover(users["service"], confirmations={'transfer_confirmed': True})
     with pytest.raises(ValueError):
-        stale.complete_handover(users["service"])
+        stale.complete_handover(users["service"], confirmations={'transfer_confirmed': True})
     with pytest.raises(ValueError):
-        stale.interrupt_handover(users["service"], "retry")
+        stale.interrupt_handover(users["service"], "retry", confirmations={'safe_outcome': 'recovered'})
     assert claim.history.filter(action="handover_completed").count() == 1
 
 
@@ -200,33 +201,34 @@ def test_approval_checks_latest_claim_and_report(users):
     stale = Claim.objects.get(pk=claim.pk)
     claim.request_evidence(users["service"], "More proof")
     with pytest.raises(ValueError):
-        stale.approve(users["service"])
+        stale.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     claim.resubmit_evidence()
     report.review(users["service"], "close")
     with pytest.raises(ValueError):
-        claim.approve(users["service"])
+        claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     with pytest.raises(ValueError):
         report.review(users["service"], "approve")
 
 
-def test_completion_rolls_back_all_changes_on_notice_failure(users, monkeypatch):
+def test_completion_survives_notice_delivery_failure(users, monkeypatch):
     report = make_report(users["owner"])
     claim = make_claim(report, users["claimant"])
     other = make_claim(report, users["other"])
-    claim.approve(users["service"])
-    claim.start_handover(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
 
     def fail(**kwargs):
         raise RuntimeError("Notice storage unavailable")
 
     monkeypatch.setattr(Notice.objects, "create", fail)
-    with pytest.raises(RuntimeError):
-        claim.complete_handover(users["service"])
+    claim.complete_handover(users["service"], confirmations={'transfer_confirmed': True})
+    assert deliver_pending()["failed"] > 0
     report.refresh_from_db()
     claim.refresh_from_db()
     other.refresh_from_db()
-    assert (report.status, claim.status, other.status) == ("approved", "handover_in_progress", "pending")
-    assert not ActionHistory.objects.filter(action__in=["handover_completed", "invalidated"]).exists()
+    assert (report.status, claim.status, other.status) == ("closed", "completed", "invalidated")
+    assert claim.history.filter(action="handover_completed").count() == 1
+    assert other.history.filter(action="invalidated").count() == 1
 
 
 def test_withdrawal_requires_post(client, users):
@@ -267,8 +269,8 @@ def test_resubmission_cannot_exceed_attachment_limit(client, users):
 def test_report_changes_cannot_interrupt_active_handover(client, users):
     report = make_report(users["owner"])
     claim = make_claim(report, users["claimant"])
-    claim.approve(users["service"])
-    claim.start_handover(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
     client.force_login(users["owner"])
     assert client.post(reverse("report_close_request", args=[report.pk])).status_code == 302
     assert client.post(reverse("report_edit", args=[report.pk]), {"item_name": "Changed"}).status_code == 302
@@ -278,11 +280,11 @@ def test_report_changes_cannot_interrupt_active_handover(client, users):
     assert claim.status == "handover_in_progress"
 
 
-def test_report_closure_rolls_back_invalidations_on_failure(users, monkeypatch):
+def test_report_closure_survives_partial_notice_delivery_failure(users, monkeypatch):
     report = make_report(users["owner"])
     claim = make_claim(report, users["claimant"])
     make_claim(report, users["other"])
-    claim.approve(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     original_create = Notice.objects.create
     count = 0
 
@@ -294,11 +296,11 @@ def test_report_closure_rolls_back_invalidations_on_failure(users, monkeypatch):
         return original_create(**kwargs)
 
     monkeypatch.setattr(Notice.objects, "create", fail_second_notice)
-    with pytest.raises(RuntimeError):
-        report.review(users["service"], "close")
+    report.review(users["service"], "close")
+    assert deliver_pending()["failed"] == 1
     report.refresh_from_db()
     claim.refresh_from_db()
-    assert report.status == "approved"
-    assert claim.status == "awaiting_handover"
-    assert report.claims.filter(status="pending").count() == 1
-    assert not report.history.filter(action__in=["invalidated", "report_closed"]).exists()
+    assert report.status == "closed"
+    assert claim.status == "invalidated"
+    assert report.claims.filter(status="invalidated").count() == 2
+    assert report.history.filter(action="report_closed").count() == 1

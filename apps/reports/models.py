@@ -3,6 +3,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.utils import timezone
 
+from .confirmations import confirmation_fields, validate_confirmations
 from .permissions import is_service_staff
 from .storage import PrivateEvidenceStorage
 
@@ -10,7 +11,8 @@ from .storage import PrivateEvidenceStorage
 def _staff_actions(instance):
     return [
         {"key": key, "label": instance.ACTION_LABELS[key],
-         "reason": key in instance.REASON_REQUIRED}
+         "reason": key in instance.REASON_REQUIRED,
+         "confirmations": confirmation_fields(key) if isinstance(instance, Claim) else []}
         for key in instance.STAFF_ACTIONS.get(instance.status, ())
     ]
 
@@ -115,14 +117,15 @@ class Report(models.Model):
             else:
                 raise ValueError("Unknown action")
             report.save(update_fields=["status", "updated_at"])
-            ActionHistory.objects.create(
+            history = ActionHistory.objects.create(
                 actor=staff, action=f"report_{report.status}", report=report,
                 previous_state=previous, new_state=report.status, reason=reason,
             )
             if report.created_by_id:
-                Notice.objects.create(
+                NotificationEvent.objects.create(
+                    history=history,
                     user_id=report.created_by_id, title=f"Report {report.reference} {report.status}",
-                    body=reason or f"Your report is now {report.status}.",
+                    body=f"Your report is now {report.status}. Open the report for details.",
                     link=f"/report/{report.pk}/",
                 )
         self.refresh_from_db()
@@ -236,7 +239,8 @@ class Claim(models.Model):
             .exists()
         )
 
-    def _apply(self, new_status, actor, action, allowed_from, reason="", result="", extras=None):
+    def _apply(self, new_status, actor, action, allowed_from, reason="", result="", extras=None,
+               confirmations=None):
         with transaction.atomic():
             # All claim and report writes take the report lock first.
             report = Report.objects.select_for_update().get(pk=self.report_id)
@@ -248,6 +252,7 @@ class Claim(models.Model):
                 raise PermissionDenied
             if locked.status not in allowed_from:
                 raise ValueError(f"{action} not allowed from {locked.status}")
+            confirmed = validate_confirmations(action, confirmations)
             if action in ("approved", "handover_started") and (
                 report.status != "approved" or report.report_type != "found"
             ):
@@ -268,16 +273,17 @@ class Claim(models.Model):
                     other.invalidate(actor, "Found-item report completed")
                 report.status = "closed"
                 report.save(update_fields=["status", "updated_at"])
-            ActionHistory.objects.create(
+            history = ActionHistory.objects.create(
                 actor=actor, action=action, claim=locked, report=locked.report,
                 previous_state=old_status, new_state=new_status,
-                reason=reason or "", result=result or "",
+                reason=reason or "", result=result or "", confirmations=confirmed,
             )
             if actor is not None and locked.claimant is not None and actor != locked.claimant:
-                Notice.objects.create(
+                NotificationEvent.objects.create(
+                    history=history,
                     user=locked.claimant,
                     title=f"Claim {locked.reference}: {action}",
-                    body=result or reason or action,
+                    body=f"Your claim is now {new_status}. Open the claim for details.",
                     link=f"/claim/{locked.pk}/",
                 )
         self.refresh_from_db()
@@ -292,9 +298,9 @@ class Claim(models.Model):
                            ("awaiting_evidence",), result="Evidence resubmitted",
                            extras={"evidence": evidence} if evidence is not None else None)
 
-    def approve(self, staff, reason=""):
+    def approve(self, staff, reason="", *, confirmations=None):
         return self._apply("awaiting_handover", staff, "approved", ("pending",),
-                           reason, "Approved, awaiting handover")
+                           reason, "Approved, awaiting handover", confirmations=confirmations)
 
     def reject(self, staff, reason):
         if not reason.strip():
@@ -302,34 +308,37 @@ class Claim(models.Model):
         return self._apply("rejected", staff, "rejected", ("pending", "awaiting_evidence"),
                            reason, "Rejected")
 
-    def start_dispute(self, staff, reason=""):
+    def start_dispute(self, staff, reason="", *, confirmations=None):
         return self._apply("under_dispute", staff, "dispute_started", ("awaiting_handover",), reason,
-                           "Under dispute review, collection paused")
+                           "Under dispute review, collection paused", confirmations=confirmations)
 
-    def resolve_dispute(self, staff, approve, reason=""):
+    def resolve_dispute(self, staff, approve, reason="", *, confirmations=None):
         if approve:
             return self._apply("awaiting_handover", staff, "dispute_resolved", ("under_dispute",), reason,
-                               "Dispute resolved, awaiting handover")
+                               "Dispute resolved, awaiting handover", confirmations=confirmations)
         if not reason.strip():
             raise ValueError("Rejection after dispute requires a reason")
         return self._apply("rejected", staff, "dispute_rejected", ("under_dispute",), reason,
-                           "Dispute rejected")
+                           "Dispute rejected", confirmations=confirmations)
 
-    def start_handover(self, staff):
+    def start_handover(self, staff, *, confirmations=None):
         return self._apply("handover_in_progress", staff, "handover_started", ("awaiting_handover",), "",
                            "Handover in progress", extras={"handover_started_by": staff,
-                                                            "handover_started_at": timezone.now()})
+                                                            "handover_started_at": timezone.now()},
+                           confirmations=confirmations)
 
-    def complete_handover(self, staff):
+    def complete_handover(self, staff, *, confirmations=None):
         return self._apply("completed", staff, "handover_completed", ("handover_in_progress",), "",
                            "Handover completed", extras={"handover_completed_by": staff,
-                                                        "handover_completed_at": timezone.now()})
+                                                        "handover_completed_at": timezone.now()},
+                           confirmations=confirmations)
 
-    def interrupt_handover(self, staff, reason):
+    def interrupt_handover(self, staff, reason, *, confirmations=None):
         if not reason.strip():
             raise ValueError("Interruption requires staff confirmation")
         return self._apply("awaiting_handover", staff, "handover_interrupted",
-                           ("handover_in_progress",), reason, "Interrupted safely, awaiting handover")
+                           ("handover_in_progress",), reason, "Interrupted safely, awaiting handover",
+                           confirmations=confirmations)
 
     def withdraw(self, user):
         return self._apply("withdrawn", user, "withdrawn", self.BEFORE_HANDOVER,
@@ -378,6 +387,9 @@ class Notice(models.Model):
     """In-app notice for a user (REQ-1.13)."""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notices")
+    event = models.OneToOneField(
+        "NotificationEvent", on_delete=models.PROTECT, null=True, blank=True, related_name="notice",
+    )
     title = models.CharField(max_length=200)
     body = models.TextField(blank=True)
     link = models.CharField(max_length=300, blank=True, default="")
@@ -421,6 +433,7 @@ class ActionHistory(models.Model):
     new_state = models.CharField(max_length=25, blank=True, default="")
     reason = models.TextField(blank=True, default="")
     result = models.TextField(blank=True, default="")
+    confirmations = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -439,3 +452,21 @@ class ActionHistory(models.Model):
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} {self.actor} {self.action}"
+
+
+class NotificationEvent(models.Model):
+    history = models.ForeignKey(ActionHistory, on_delete=models.PROTECT, related_name="notification_events")
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="notification_events")
+    title = models.CharField(max_length=200)
+    body = models.TextField(blank=True)
+    link = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["history", "user"], name="one_notice_event_per_recipient"),
+        ]

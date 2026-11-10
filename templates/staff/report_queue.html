@@ -16,10 +16,8 @@
     <img src="{{ report.photo.url }}" alt="{{ report.item_name }}" style="max-width: 200px; margin-top: 0.5rem; border-radius: 4px;">
     {% endif %}
 
-    <form method="post" action="{% url 'staff_report_review' report.pk %}" style="margin-top: 1rem;">
-        {% csrf_token %}
-        {% include 'staff/actions.html' with actions=report.available_actions %}
-    </form>
+    {% url 'staff_report_review' report.pk as action_url %}
+    {% include 'staff/actions.html' with actions=report.available_actions action_url=action_url %}
 </div>
 {% empty %}
 <div class="card"><p>No reports waiting for moderation.</p></div>

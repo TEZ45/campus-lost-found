@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 
 from apps.reports import services
 from apps.reports.models import ActionHistory, Claim, ClaimAttachment, Notice, Report
+from apps.reports.notifications import deliver_pending
 
 from .test_uploads import upload
 from .test_workflow import make_claim, make_report
@@ -159,11 +160,11 @@ def test_report_review_notice_failure_preserves_report_and_photo(users, settings
         raise RuntimeError("Notice storage unavailable")
 
     monkeypatch.setattr(Notice.objects, "create", fail)
-    with pytest.raises(RuntimeError, match="Notice"):
-        services.review_report(users["service"], report.pk, "approve")
+    services.review_report(users["service"], report.pk, "approve")
+    assert deliver_pending()["failed"] == 1
     report.refresh_from_db()
-    assert report.status == "pending"
-    assert not report.history.exists()
+    assert report.status == "approved"
+    assert report.history.filter(action="report_approved").exists()
     assert snapshot(settings.MEDIA_ROOT) == original_files
 
 
@@ -176,9 +177,10 @@ def test_claim_action_notice_failure_preserves_claim_and_evidence(users, monkeyp
         raise RuntimeError("Notice storage unavailable")
 
     monkeypatch.setattr(Notice.objects, "create", fail)
-    with pytest.raises(RuntimeError, match="Notice"):
-        services.act_on_claim(users["service"], claim.pk, "approve")
+    services.act_on_claim(users["service"], claim.pk, "approve",
+                          confirmations={"evidence_reviewed": True, "custody_confirmed": True})
+    assert deliver_pending()["failed"] == 1
     claim.refresh_from_db()
-    assert claim.status == "pending"
-    assert not claim.history.exists()
+    assert claim.status == "awaiting_handover"
+    assert claim.history.filter(action="approved").exists()
     assert Path(attachment.image.path).read_bytes() == original

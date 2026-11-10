@@ -57,8 +57,37 @@ Review requests accept `action` and optional `reason`. Report actions are
 `request_evidence`, `start_dispute`, `resolve_keep`, `resolve_reject`,
 `start_handover`, `complete_handover`, `interrupt_handover`. Rejection and safe
 interruption require a reason. Consult each resource's `allowed_actions`
-array of `{key, label, reason}` before rendering controls. The server checks
+array of `{key, label, reason, confirmations}` before rendering staff controls.
+User actions may omit `confirmations`. The server checks
 the action again inside the transaction.
+
+Staff claim actions also accept a `confirmations` object. Boolean values must
+be JSON `true`, supplied explicitly by the operator. Missing, false, unknown
+or incorrectly typed confirmations return 400 without changing the claim.
+Report review actions do not accept this field.
+
+| Claim action | Required confirmations |
+| --- | --- |
+| `approve` | `evidence_reviewed: true`, `custody_confirmed: true` |
+| `start_dispute`, `resolve_keep`, `resolve_reject` | `custody_confirmed: true` |
+| `start_handover` | `identity_verified: true`, `custody_confirmed: true` |
+| `complete_handover` | `transfer_confirmed: true` |
+| `interrupt_handover` | `safe_outcome: "not_transferred"` or `"recovered"` |
+
+Each staff action lists its required confirmation inputs as `{key, label}`,
+with optional `choices: [{value, label}]`. No confirmation is selected by
+default. History includes the accepted confirmations with the server-recorded
+actor and time. These are staff attestations, not automatic proof of custody.
+
+Record handover start successfully before releasing the item. After an unknown
+response, GET the claim and review its status/history before another action.
+Completed remains final; uncertain physical outcomes remain in progress and
+retain their reservation. Repeating a completed transition returns 409 and
+does not create another handover record.
+
+Status changes enqueue durable notification events. Notice delivery requires
+the `deliver_notifications` worker and can be retried independently. A notice
+delivery failure does not roll back committed claim or report outcomes.
 
 Unknown input fields are rejected. Clients cannot assign status, ownership,
 reviewer, staff role or audit fields. Public reports omit contact data;

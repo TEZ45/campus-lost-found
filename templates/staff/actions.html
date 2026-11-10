@@ -1,10 +1,31 @@
 {% if actions %}
-<input type="text" name="reason" placeholder="Reason when required" required style="width: 70%; padding: 0.4rem; margin-bottom: 0.5rem;">
-<div>
-    {% for action in actions %}
-    <button type="submit" name="action" value="{{ action.key }}" class="btn"{% if not action.reason %} formnovalidate{% endif %}>{{ action.label }}</button>
-    {% endfor %}
-</div>
+{% for action in actions %}
+<form method="post" action="{{ action_url }}" style="margin-top: 1rem;">
+    {% csrf_token %}
+    <fieldset>
+        <legend>{{ action.label }}</legend>
+        {% for field in action.confirmations %}
+        <label style="display: block; margin: 0.5rem 0;">
+            {% if field.choices %}
+            {{ field.label }}
+            <select name="{{ field.key }}" required>
+                <option value="">Select the verified outcome</option>
+                {% for choice in field.choices %}
+                <option value="{{ choice.value }}">{{ choice.label }}</option>
+                {% endfor %}
+            </select>
+            {% else %}
+            <input type="checkbox" name="{{ field.key }}" required> {{ field.label }}
+            {% endif %}
+        </label>
+        {% endfor %}
+        <label>Reason{% if not action.reason %} (optional){% endif %}
+            <input type="text" name="reason"{% if action.reason %} required{% endif %}>
+        </label>
+        <button type="submit" name="action" value="{{ action.key }}" class="btn">{{ action.label }}</button>
+    </fieldset>
+</form>
+{% endfor %}
 {% else %}
 <p>No actions are available in the current state.</p>
 {% endif %}

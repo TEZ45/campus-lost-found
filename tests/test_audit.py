@@ -94,7 +94,8 @@ def test_audit_migration_preserves_existing_records():
     entry = History.objects.create(action="existing_event", reason="Keep this record")
     try:
         MigrationExecutor(connection).migrate(current)
-        preserved = ActionHistory.objects.get(pk=entry.pk)
+        current_apps = MigrationExecutor(connection).loader.project_state(current).apps
+        preserved = current_apps.get_model("reports", "ActionHistory").objects.get(pk=entry.pk)
         assert (preserved.action, preserved.reason) == ("existing_event", "Keep this record")
     finally:
-        MigrationExecutor(connection).migrate(current)
+        MigrationExecutor(connection).migrate([("reports", "0006_notification_outbox_and_confirmations")])

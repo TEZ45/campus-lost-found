@@ -15,10 +15,8 @@
     <a href="{% url 'claim_attachment' att.pk %}">Download evidence</a>
     {% endfor %}
 
-    <form method="post" action="{% url 'staff_claim_review' claim.pk %}" style="margin-top: 1rem;">
-        {% csrf_token %}
-        {% include 'staff/actions.html' with actions=claim.available_actions %}
-    </form>
+    {% url 'staff_claim_review' claim.pk as action_url %}
+    {% include 'staff/actions.html' with actions=claim.available_actions action_url=action_url %}
 </div>
 {% empty %}
 <div class="card"><p>No claims waiting for review.</p></div>

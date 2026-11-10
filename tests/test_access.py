@@ -7,6 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from apps.reports.models import ActionHistory, Claim, Match, Notice, Report, UserProfile
+from apps.reports.notifications import deliver_pending
 
 
 def make_png_bytes():
@@ -190,7 +191,8 @@ def test_staff_actions_generate_notices(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
     client.force_login(staff_user)
-    client.post(reverse("staff_claim_review", args=[claim.pk]), {"action": "approve", "reason": "ok"})
+    client.post(reverse("staff_claim_review", args=[claim.pk]), {"action": "approve", "reason": "ok", "evidence_reviewed": "on", "custody_confirmed": "on"})
+    deliver_pending()
     notice = Notice.objects.get(user=alice)
     assert "approved" in notice.title.lower()
     assert notice.link == f"/claim/{claim.pk}/"

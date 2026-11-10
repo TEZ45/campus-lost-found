@@ -11,11 +11,10 @@
     <h3 style="margin-bottom: 0.25rem;">Claim {{ claim.reference }} - {{ claim.report.item_name }} ({{ claim.report.reference }})</h3>
     <p class="meta">Claimant: {{ claim.claimant_name }} | Status: <strong>{{ claim.get_status_display }}</strong></p>
     <p style="margin-top: 0.5rem;">{{ claim.evidence|truncatewords:30 }}</p>
+    <a href="{% url 'claim_detail' claim.pk %}">Review claim details</a>
 
-    <form method="post" action="{% url 'staff_handover_action' claim.pk %}" style="margin-top: 1rem;">
-        {% csrf_token %}
-        {% include 'staff/actions.html' with actions=claim.available_actions %}
-    </form>
+    {% url 'staff_handover_action' claim.pk as action_url %}
+    {% include 'staff/actions.html' with actions=claim.available_actions action_url=action_url %}
 </div>
 {% empty %}
 <div class="card"><p>No claims in handover or dispute states.</p></div>

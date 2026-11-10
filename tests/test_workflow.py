@@ -1,4 +1,4 @@
-"""Core workflow tests covering URS acceptance checks A1-A6 and the claim state model."""
+"""Core workflow checks for URS scenarios and claim state rules."""
 import io
 
 import pytest
@@ -6,6 +6,16 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from apps.reports.models import ActionHistory, Claim, Report, UserProfile
+
+CONFIRMATIONS = {
+    "approve": {"evidence_reviewed": True, "custody_confirmed": True},
+    "start_dispute": {"custody_confirmed": True},
+    "resolve_keep": {"custody_confirmed": True},
+    "resolve_reject": {"custody_confirmed": True},
+    "start_handover": {"identity_verified": True, "custody_confirmed": True},
+    "complete_handover": {"transfer_confirmed": True},
+    "interrupt_handover": {"safe_outcome": "recovered"},
+}
 
 
 def make_png_bytes():
@@ -66,13 +76,13 @@ def test_a1_at_most_one_reserved_claim(client, staff_user, alice, bob):
     c2 = make_claim(report, bob)
     client.force_login(staff_user)
 
-    client.post(reverse("staff_claim_review", args=[c1.pk]), {"action": "approve", "reason": "ok"})
+    client.post(reverse("staff_claim_review", args=[c1.pk]), {"action": "approve", "reason": "ok", "evidence_reviewed": "on", "custody_confirmed": "on"})
     c1.refresh_from_db()
     assert c1.status == "awaiting_handover"
     assert c1.holds_reservation
 
     # Second approval for the same item must fail; c2 stays pending (A1).
-    resp = client.post(reverse("staff_claim_review", args=[c2.pk]), {"action": "approve", "reason": "ok"},
+    resp = client.post(reverse("staff_claim_review", args=[c2.pk]), {"action": "approve", "reason": "ok", "evidence_reviewed": "on", "custody_confirmed": "on"},
                        follow=True)
     c2.refresh_from_db()
     assert c2.status == "pending"
@@ -84,10 +94,10 @@ def test_a1_dispute_blocks_second_approval(client, staff_user, alice, bob):
     report = make_report(alice)
     c1 = make_claim(report, alice)
     c2 = make_claim(report, bob)
-    c1.approve(staff_user, "ok")
-    c1.start_dispute(staff_user, "doubtful")
+    c1.approve(staff_user, "ok", confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    c1.start_dispute(staff_user, "doubtful", confirmations={'custody_confirmed': True})
     client.force_login(staff_user)
-    client.post(reverse("staff_claim_review", args=[c2.pk]), {"action": "approve", "reason": "ok"})
+    client.post(reverse("staff_claim_review", args=[c2.pk]), {"action": "approve", "reason": "ok", "evidence_reviewed": "on", "custody_confirmed": "on"})
     c2.refresh_from_db()
     assert c2.status == "pending"
 
@@ -104,9 +114,8 @@ def test_a2_evidence_resubmission_returns_to_pending(client, staff_user, alice):
     assert claim.status == "awaiting_evidence"
     claim.resubmit_evidence()
     assert claim.status == "pending"
-    # Under dispute: additional evidence keeps the state (A2).
-    claim.approve(staff_user)
-    claim.start_dispute(staff_user)
+    claim.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_dispute(staff_user, confirmations={'custody_confirmed': True})
     assert claim.status == "under_dispute"
 
 
@@ -148,8 +157,8 @@ def test_a2_claimant_and_staff_can_read_evidence(client, staff_user, alice):
 def test_a3_handover_blocks_withdrawal_and_cancellation(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
-    claim.approve(staff_user)
-    claim.start_handover(staff_user)
+    claim.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(staff_user, confirmations={'identity_verified': True, 'custody_confirmed': True})
     assert claim.status == "handover_in_progress"
 
     # Claimant withdraw must fail while handover is in progress.
@@ -177,9 +186,9 @@ def test_a3_handover_blocks_withdrawal_and_cancellation(client, staff_user, alic
 def test_a4_interrupted_handover_restores_awaiting(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
-    claim.approve(staff_user)
-    claim.start_handover(staff_user)
-    claim.interrupt_handover(staff_user, "Item was not handed over; recovered")
+    claim.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(staff_user, confirmations={'identity_verified': True, 'custody_confirmed': True})
+    claim.interrupt_handover(staff_user, "Item was not handed over; recovered", confirmations={'safe_outcome': 'recovered'})
     assert claim.status == "awaiting_handover"
     assert claim.holds_reservation  # reservation retained
 
@@ -195,9 +204,9 @@ def test_a5_completion_closes_report_and_invalidates_before_handover(client, sta
     c2 = make_claim(report, bob)          # pending
     c3 = make_claim(report, bob, status="rejected")
     c4 = make_claim(report, alice)        # second pending
-    c1.approve(staff_user)
-    c1.start_handover(staff_user)
-    c1.complete_handover(staff_user)
+    c1.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    c1.start_handover(staff_user, confirmations={'identity_verified': True, 'custody_confirmed': True})
+    c1.complete_handover(staff_user, confirmations={'transfer_confirmed': True})
 
     c1.refresh_from_db()
     c2.refresh_from_db()
@@ -215,11 +224,11 @@ def test_a5_completion_closes_report_and_invalidates_before_handover(client, sta
 def test_a4_no_duplicate_handover_records(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
-    claim.approve(staff_user)
-    claim.start_handover(staff_user)
-    claim.complete_handover(staff_user)
+    claim.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(staff_user, confirmations={'identity_verified': True, 'custody_confirmed': True})
+    claim.complete_handover(staff_user, confirmations={'transfer_confirmed': True})
     with pytest.raises(ValueError):
-        claim.complete_handover(staff_user)  # already final
+        claim.complete_handover(staff_user, confirmations={'transfer_confirmed': True})  # already final
     count = ActionHistory.objects.filter(claim=claim, action="handover_completed").count()
     assert count == 1
 

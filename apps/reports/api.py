@@ -20,6 +20,7 @@ from .models import ActionHistory, Claim, Notice, Report
 from .permissions import can_read_evidence, can_view_report, is_service_staff
 from .serializers import (
     ActionInput,
+    ClaimActionInput,
     ClaimInput,
     ClaimOutput,
     HistoryOutput,
@@ -316,7 +317,7 @@ class StaffHandovers(StaffClaims):
 class StaffClaimAction(BaseApi):
     def post(self, request, pk):
         self.require_staff(request)
-        data = self.input(ActionInput, request)
+        data = self.input(ClaimActionInput, request)
         if data["action"] not in Claim.ACTION_LABELS:
             raise ValidationError({"action": ["Unknown staff claim action."]})
         claim = services.act_on_claim(request.user, pk, **data)
