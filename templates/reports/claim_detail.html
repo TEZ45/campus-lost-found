@@ -24,7 +24,7 @@
     {% endfor %}
 </div>
 
-{% if claim.status == 'awaiting_evidence' and claim.claimant == user %}
+{% if 'resubmit' in available_actions %}
 <div class="card">
     <h2 style="margin-bottom: 0.5rem;">Staff requested additional evidence</h2>
     {% if resubmit_form.errors %}
@@ -51,7 +51,7 @@
 </div>
 {% endif %}
 
-{% if claim.claimant == user and claim.status in claim.BEFORE_HANDOVER %}
+{% if 'withdraw' in available_actions %}
 <div class="card">
     <form method="post" action="{% url 'claim_withdraw' claim.pk %}" onsubmit="return confirm('Withdraw this claim?');">
         {% csrf_token %}

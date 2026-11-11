@@ -7,7 +7,7 @@ from django.db import close_old_connections, connections
 
 from apps.reports.models import Claim, Report
 
-from .test_workflow import make_claim, make_report
+from .test_workflow import CONFIRMATIONS, make_claim, make_report
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -23,7 +23,8 @@ def race(*operations):
             actor = User.objects.get(pk=actor_id)
             barrier.wait(timeout=10)
             try:
-                getattr(obj, method)(actor, *args)
+                kwargs = {"confirmations": CONFIRMATIONS[method]} if method in CONFIRMATIONS else {}
+                getattr(obj, method)(actor, *args, **kwargs)
                 return True
             except ValueError:
                 return False
@@ -49,7 +50,7 @@ def test_concurrent_approvals_reserve_one_claim(users):
 
 def test_concurrent_handover_and_withdrawal_have_one_winner(users):
     claim = make_claim(make_report(users["owner"]), users["claimant"])
-    claim.approve(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     results = race(
         (Claim, claim.pk, "start_handover", users["service"].pk, ()),
         (Claim, claim.pk, "withdraw", users["claimant"].pk, ()),
@@ -63,7 +64,7 @@ def test_concurrent_handover_and_withdrawal_have_one_winner(users):
 def test_concurrent_handover_and_report_close_are_consistent(users):
     report = make_report(users["owner"])
     claim = make_claim(report, users["claimant"])
-    claim.approve(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     results = race(
         (Claim, claim.pk, "start_handover", users["service"].pk, ()),
         (Report, report.pk, "review", users["service"].pk, ("close",)),
@@ -80,8 +81,8 @@ def test_concurrent_completion_records_one_handover(users):
     report = make_report(users["owner"])
     claim = make_claim(report, users["claimant"])
     other = make_claim(report, users["other"])
-    claim.approve(users["service"])
-    claim.start_handover(users["service"])
+    claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
+    claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
     operation = (Claim, claim.pk, "complete_handover", users["service"].pk, ())
     assert sorted(race(operation, operation)) == [False, True]
     report.refresh_from_db()

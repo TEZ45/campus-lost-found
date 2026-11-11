@@ -7,6 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from apps.reports.models import ActionHistory, Claim, Match, Notice, Report, UserProfile
+from apps.reports.notifications import deliver_pending
 
 
 def make_png_bytes():
@@ -190,7 +191,8 @@ def test_staff_actions_generate_notices(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
     client.force_login(staff_user)
-    client.post(reverse("staff_claim_review", args=[claim.pk]), {"action": "approve", "reason": "ok"})
+    client.post(reverse("staff_claim_review", args=[claim.pk]), {"action": "approve", "reason": "ok", "evidence_reviewed": "on", "custody_confirmed": "on"})
+    deliver_pending()
     notice = Notice.objects.get(user=alice)
     assert "approved" in notice.title.lower()
     assert notice.link == f"/claim/{claim.pk}/"
@@ -255,10 +257,10 @@ def test_report_attachment_single_image(client, alice):
 # ------------------------------------------------------------------ #
 
 @pytest.mark.django_db
-def test_matches_generation_and_reason(client, alice):
+def test_matches_generation_and_reason(client, alice, staff_user):
     lost = make_report(alice, report_type="lost", item="Black Wallet", category="Accessories")
     found = make_report(alice, report_type="found", item="Wallet Black", category="Accessories")
-    client.force_login(alice)
+    client.force_login(staff_user)
     client.post(reverse("matches"))
     match = Match.objects.filter(lost_report=lost, found_report=found).first()
     assert match is not None

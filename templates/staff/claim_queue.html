@@ -15,20 +15,8 @@
     <a href="{% url 'claim_attachment' att.pk %}">Download evidence</a>
     {% endfor %}
 
-    <form method="post" action="{% url 'staff_claim_review' claim.pk %}" style="margin-top: 1rem;">
-        {% csrf_token %}
-        <input type="text" name="reason" placeholder="Reason (required for rejection; useful for evidence requests)" style="width: 70%; padding: 0.4rem; margin-bottom: 0.5rem;">
-        <div>
-            {% if claim.status == 'pending' %}
-                <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
-                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
-                <button type="submit" name="action" value="request_evidence" class="btn btn-warning">Request evidence</button>
-            {% elif claim.status == 'awaiting_evidence' %}
-                <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
-                <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
-            {% endif %}
-        </div>
-    </form>
+    {% url 'staff_claim_review' claim.pk as action_url %}
+    {% include 'staff/actions.html' with actions=claim.available_actions action_url=action_url %}
 </div>
 {% empty %}
 <div class="card"><p>No claims waiting for review.</p></div>

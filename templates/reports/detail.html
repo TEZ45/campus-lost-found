@@ -20,19 +20,17 @@
     <p class="meta">Report reference: {{ report.reference }}</p>
 
     <div style="margin-top: 1rem;">
-        {% if report.report_type == 'found' and report.status == 'approved' %}
-            {% if user.is_authenticated %}
+        {% if 'claim' in available_actions %}
             <a href="{% url 'claim_create' report.pk %}" class="btn btn-success">This is mine - Submit Claim</a>
-            {% else %}
+        {% elif not user.is_authenticated and report.report_type == 'found' and report.status == 'approved' %}
             <a href="/login/?next={{ request.path }}" class="btn">Login to submit a claim</a>
-            {% endif %}
         {% endif %}
 
-        {% if can_manage_report %}
+        {% if 'edit' in available_actions %}
             <a href="{% url 'report_edit' report.pk %}" class="btn" style="margin-left: 0.5rem;">Edit</a>
-            {% if report.status != 'closed' and report.status != 'close_requested' %}
+        {% endif %}
+        {% if 'request_close' in available_actions %}
             <a href="{% url 'report_close_request' report.pk %}" class="btn btn-warning" style="margin-left: 0.5rem;">Request Closure</a>
-            {% endif %}
         {% endif %}
     </div>
 </div>
@@ -42,7 +40,7 @@
 {% for match in matches %}
 <div class="card">
     <p><strong>{{ match.lost_report.item_name }}</strong> - <strong>{{ match.found_report.item_name }}</strong>
-        <span class="badge badge-status">score {{ match.score|floatformat:0 }}%</span></p>
+        <span class="badge badge-status">score {% widthratio match.score 1 100 %}%</span></p>
     {% if match.reason %}<p class="meta">Reason: {{ match.reason }}</p>{% endif %}
     <p class="meta">A suggested match never proves ownership (a staff member verifies claims separately).</p>
 </div>

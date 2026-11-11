@@ -1,157 +1,86 @@
-from urllib.parse import urlparse
-
-from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
-from django.core.files.storage import FileSystemStorage
-from django.db import transaction
-from django.db.models import Q
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST, require_safe
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_http_methods, require_POST, require_safe
 
+from . import services
+from .confirmations import FIELDS
 from .forms import ClaimForm, ReportForm, SearchForm
-from .models import ActionHistory, Claim, ClaimAttachment, Match, Notice, Report
+from .models import Claim, Notice, Report
 from .permissions import (
     can_manage_report,
     can_read_evidence,
     can_view_report,
-    is_service_staff,
+    claim_actions,
+    report_actions,
     staff_required,
 )
 
 
-def log_history(action, actor, report=None, claim=None, prev="", new="", reason="", result=""):
-    ActionHistory.objects.create(
-        actor=actor, action=action, report=report, claim=claim,
-        previous_state=prev, new_state=new, reason=reason or "", result=result or "",
-    )
+def form_error(form, error):
+    for message in error.messages:
+        form.add_error(None, message)
 
 
-def generate_matches(report):
-    """REQ-1.6 (Could): suggest candidate lost<->found pairs with a reason.
-    Never approves a claim automatically (DOM-1)."""
-    if report.report_type == "lost":
-        candidates = Report.objects.filter(report_type="found", status="approved").exclude(pk=report.pk)
-    else:
-        candidates = Report.objects.filter(report_type="lost", status="approved").exclude(pk=report.pk)
-    created = 0
-    for cand in candidates:
-        score, reason = match_score(report, cand)
-        if score <= 0:
-            continue
-        kwargs = {"lost_report": report if report.report_type == "lost" else cand,
-                  "found_report": report if report.report_type == "found" else cand}
-        _, was_created = Match.objects.get_or_create(**kwargs, defaults={"score": score, "reason": reason})
-        created += int(was_created)
-    return created
+def safe_path(value, fallback="report_list"):
+    if value and value.startswith("/") and url_has_allowed_host_and_scheme(value, allowed_hosts=set()):
+        return value
+    return fallback
 
 
-def match_score(a, b):
-    """Simple heuristic: same category or shared keywords."""
-    s = 0.0
-    reasons = []
-    if a.category and a.category.lower() == (b.category or "").lower():
-        s += 0.5
-        reasons.append("same category")
-    a_words = {w.lower() for w in a.item_name.split() if len(w) > 2}
-    b_words = {w.lower() for w in b.item_name.split() if len(w) > 2}
-    shared = a_words & b_words
-    if shared:
-        s += 0.3 * min(len(shared), 3)
-        reasons.append(f"keywords: {', '.join(sorted(shared))}")
-    return round(s, 2), "; ".join(reasons)
-
-
-# --------------------------------------------------------------------- #
-# Accounts (REQ-1.1)                                                    #
-# --------------------------------------------------------------------- #
-
+@require_http_methods(["GET", "POST"])
 def register(request):
-    if request.method == "POST":
-        form = UserCreationForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            messages.success(request, "Account created. Welcome!")
-            return redirect("report_list")
-    else:
-        form = UserCreationForm()
+    form = UserCreationForm(request.POST if request.method == "POST" else None)
+    if request.method == "POST" and form.is_valid():
+        user = form.save()
+        login(request, user)
+        return redirect("report_list")
     return render(request, "register.html", {"form": form})
 
 
-def _safe_next(value):
-    """Allow only local paths for the post-login redirect (prevent open redirects)."""
-    if not value:
-        return "report_list"
-    if value.startswith("//") or urlparse(value).netloc:
-        return "report_list"
-    return value
-
-
+@require_http_methods(["GET", "POST"])
 def login_view(request):
     if request.user.is_authenticated:
         return redirect("report_list")
-    next_url = _safe_next(request.POST.get("next") or request.GET.get("next"))
-    if request.method == "POST":
-        form = AuthenticationForm(request, data=request.POST)
-        if form.is_valid():
-            login(request, form.get_user())
-            return redirect(next_url)
-    else:
-        form = AuthenticationForm(request)
+    next_url = safe_path(request.POST.get("next") or request.GET.get("next"))
+    form = AuthenticationForm(request, data=request.POST if request.method == "POST" else None)
+    if request.method == "POST" and form.is_valid():
+        login(request, form.get_user())
+        return redirect(next_url)
     return render(request, "login.html", {"form": form, "next": next_url})
 
 
+@login_required
+@require_POST
 def logout_view(request):
     logout(request)
-    messages.info(request, "You have been signed out.")
     return redirect("report_list")
 
 
-# --------------------------------------------------------------------- #
-# Reports                                                               #
-# --------------------------------------------------------------------- #
-
+@require_safe
 def report_list(request):
-    """REQ-1.5 Search: keyword + type / category / location / date / status."""
-    form = SearchForm(request.GET or None)
-    reports = Report.objects.all()
-    if not is_service_staff(request.user):
-        reports = reports.filter(status="approved")
-    if form.is_valid():
-        cd = form.cleaned_data
-        q = cd.get("q")
-        if q:
-            reports = reports.filter(
-                Q(item_name__icontains=q) | Q(description__icontains=q) | Q(category__icontains=q)
-            )
-        if cd.get("report_type"):
-            reports = reports.filter(report_type=cd["report_type"])
-        if cd.get("category"):
-            reports = reports.filter(category__icontains=cd["category"])
-        if cd.get("location"):
-            reports = reports.filter(location__icontains=cd["location"])
-        if cd.get("date_from"):
-            reports = reports.filter(event_date__gte=cd["date_from"])
-        if cd.get("date_to"):
-            reports = reports.filter(event_date__lte=cd["date_to"])
-        if cd.get("status"):
-            reports = reports.filter(status=cd["status"])
+    form = SearchForm(request.GET)
+    reports = (services.report_queryset(request.user, form.cleaned_data)
+               if form.is_valid() else Report.objects.none())
     return render(request, "reports/list.html", {"reports": reports, "form": form})
 
 
+@require_safe
 def report_detail(request, pk):
     report = get_object_or_404(Report, pk=pk)
     if not can_view_report(request.user, report):
         raise Http404
-    matches = report.lost_matches.all() if report.report_type == "lost" else report.found_matches.all()
-    matches = matches.filter(lost_report__status="approved", found_report__status="approved")
+    matches = services.public_matches().filter(
+        **{"lost_report" if report.report_type == "lost" else "found_report": report},
+    )
     return render(request, "reports/detail.html", {
         "report": report, "matches": matches,
-        "can_manage_report": can_manage_report(request.user, report),
+        "available_actions": [item["key"] for item in report_actions(request.user, report)],
     })
 
 
@@ -171,308 +100,246 @@ def report_photo(request, name):
 @login_required
 @require_safe
 def claim_attachment(request, pk):
-    attachment = get_object_or_404(ClaimAttachment.objects.select_related("claim"), pk=pk)
-    if not can_read_evidence(request.user, attachment.claim):
-        return render(request, "403.html", status=403)
-    try:
-        evidence = attachment.image.open("rb")
-    except FileNotFoundError:
-        # Legacy files remain private while the storage migration is pending.
-        try:
-            evidence = FileSystemStorage(location=settings.MEDIA_ROOT).open(attachment.image.name)
-        except FileNotFoundError:
-            raise Http404 from None
-    response = FileResponse(evidence, as_attachment=True, content_type="application/octet-stream")
+    content = services.open_claim_attachment(request.user, pk)
+    response = FileResponse(content, as_attachment=True, content_type="application/octet-stream")
     response["Cache-Control"] = "private, no-store"
     response["X-Content-Type-Options"] = "nosniff"
     return response
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
 def report_create(request):
-    if request.method == "POST":
-        form = ReportForm(request.POST, request.FILES)
-        if form.is_valid():
-            report = form.save(commit=False)
-            report.created_by = request.user
-            report.status = "pending"
-            report.save()
-            log_history("report_submitted", request.user, report=report, new="pending")
-            messages.success(request, "Report submitted! It will be reviewed soon.")
+    form = ReportForm(request.POST, request.FILES) if request.method == "POST" else ReportForm()
+    if request.method == "POST" and form.is_valid():
+        try:
+            report = services.create_report(request.user, form.cleaned_data)
+        except ValidationError as exc:
+            form_error(form, exc)
+        else:
+            messages.success(request, "Report submitted for review.")
             return redirect("report_detail", pk=report.pk)
-    else:
-        form = ReportForm()
     return render(request, "reports/form.html", {"form": form, "title": "New Report"})
 
 
 @login_required
-@transaction.atomic
+@require_http_methods(["GET", "POST"])
 def report_edit(request, pk):
-    """REQ-1.4: owners may edit; changed public content returns to pending review."""
-    report = get_object_or_404(Report.objects.select_for_update(), pk=pk)
+    report = get_object_or_404(Report, pk=pk)
     if not can_manage_report(request.user, report):
-        return render(request, "403.html", status=403)
-    if report.status == "closed" or report.claims.filter(status__in=Claim.RESERVED_STATES).exists():
-        messages.error(request, "Cannot edit a closed report or an item with a reservation.")
+        raise PermissionDenied
+    if "edit" not in {item["key"] for item in report_actions(request.user, report)}:
+        messages.error(request, "Cannot edit this report in its current state.")
         return redirect("report_detail", pk=pk)
-    was_public = report.is_public()
-    if request.method == "POST":
-        form = ReportForm(request.POST, request.FILES, instance=report)
-        if form.is_valid():
-            report = form.save(commit=False)
-            if was_public:
-                report.status = "pending"  # changed public content requires another review
-            report.save()
-            log_history("report_edited", request.user, report=report,
-                        prev="approved" if was_public else report.status,
-                        new=report.status, result="Resubmitted for review" if was_public else "Saved")
+    form = (ReportForm(request.POST, request.FILES, instance=report)
+            if request.method == "POST" else ReportForm(instance=report))
+    if request.method == "POST" and form.is_valid():
+        try:
+            services.update_report(request.user, pk, form.cleaned_data)
+        except ValidationError as exc:
+            form_error(form, exc)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("report_detail", pk=pk)
+        else:
             messages.success(request, "Report updated.")
-            return redirect("report_detail", pk=report.pk)
-    else:
-        form = ReportForm(instance=report)
+            return redirect("report_detail", pk=pk)
     return render(request, "reports/form.html", {"form": form, "title": "Edit Report"})
 
 
 @login_required
-@transaction.atomic
+@require_http_methods(["GET", "POST"])
 def report_close_request(request, pk):
-    """REQ-1.4 / 1.12: owner requests closure; staff approve (close request queue)."""
-    report = get_object_or_404(Report.objects.select_for_update(), pk=pk)
+    report = get_object_or_404(Report, pk=pk)
     if not can_manage_report(request.user, report):
-        return render(request, "403.html", status=403)
-    if report.status == "closed":
-        messages.warning(request, "This report is already closed.")
-        return redirect("report_detail", pk=pk)
+        raise PermissionDenied
     if request.method == "POST":
-        if report.claims.filter(status="handover_in_progress").exists():
-            messages.error(request, "Cannot request closure while a handover is in progress.")
-            return redirect("report_detail", pk=pk)
-        previous = report.status
-        report.status = "close_requested"
-        report.save(update_fields=["status", "updated_at"])
-        log_history("close_requested", request.user, report=report, prev=previous, new="close_requested")
-        messages.success(request, "Closure requested. Staff will review it.")
+        try:
+            services.request_report_closure(request.user, pk)
+            messages.success(request, "Closure requested.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
         return redirect("report_detail", pk=pk)
     return render(request, "reports/confirm_close.html", {"report": report})
 
 
-# --------------------------------------------------------------------- #
-# Claims                                                                #
-# --------------------------------------------------------------------- #
-
 @login_required
-@transaction.atomic
+@require_http_methods(["GET", "POST"])
 def claim_create(request, report_pk):
-    """REQ-1.7 / DOM-1: signed-in users claim approved, open found reports."""
-    report = get_object_or_404(Report.objects.select_for_update(), pk=report_pk, report_type="found")
-    if report.status != "approved":
-        messages.error(request, "Claims are only accepted for approved, open found-item reports.")
+    report = get_object_or_404(Report, pk=report_pk, report_type="found")
+    if "claim" not in {item["key"] for item in report_actions(request.user, report)}:
+        messages.error(request, "Claims require an approved, open found report.")
         return redirect("report_detail", pk=report.pk)
-    if request.method == "POST":
-        form = ClaimForm(request.POST, request.FILES)
-        if form.is_valid():
-            claim = form.save(commit=False)
-            claim.report = report
-            claim.claimant = request.user
-            claim.claimant_name = request.user.get_full_name() or request.user.username
-            claim.claimant_email = request.user.email or ""
-            claim.status = "pending"
-            claim.save()
-            form.save_attachments(claim)
-            log_history("claim_submitted", request.user, report=report, claim=claim, new="pending")
+    form = ClaimForm(request.POST, request.FILES) if request.method == "POST" else ClaimForm()
+    if request.method == "POST" and form.is_valid():
+        try:
+            claim = services.create_claim(request.user, report_pk,
+                                          {"evidence": form.cleaned_data["evidence"]},
+                                          form.cleaned_data["images"])
+        except ValidationError as exc:
+            form_error(form, exc)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("report_detail", pk=report.pk)
+        else:
             messages.success(request, f"Claim submitted. Reference: {claim.reference}.")
             return redirect("claim_detail", pk=claim.pk)
-    else:
-        form = ClaimForm()
     return render(request, "reports/claim_form.html", {"form": form, "report": report})
 
 
 @login_required
+@require_safe
 def claim_detail(request, pk):
     claim = get_object_or_404(Claim, pk=pk)
     if not can_read_evidence(request.user, claim):
-        return render(request, "403.html", status=403)
-    resubmit_form = None
-    if claim.status == "awaiting_evidence" and claim.claimant == request.user:
-        resubmit_form = ClaimForm()
-    return render(request, "reports/claim_detail.html",
-                  {"claim": claim, "resubmit_form": resubmit_form,
-                   "can_read_evidence": True})
+        raise PermissionDenied
+    actions = [item["key"] for item in claim_actions(request.user, claim)]
+    return render(request, "reports/claim_detail.html", {
+        "claim": claim, "resubmit_form": ClaimForm() if "resubmit" in actions else None,
+        "available_actions": actions,
+    })
 
 
 @login_required
-@transaction.atomic
+@require_http_methods(["GET", "POST"])
 def claim_resubmit(request, pk):
-    """REQ-1.8: awaiting_evidence -> pending with new evidence and attachments."""
     claim = get_object_or_404(Claim, pk=pk)
-    Report.objects.select_for_update().get(pk=claim.report_id)
-    claim = Claim.objects.select_for_update().get(pk=pk)
-    if claim.claimant != request.user:
-        return render(request, "403.html", status=403)
-    if request.method == "POST":
-        form = ClaimForm(request.POST, request.FILES, instance=claim)
-        if form.is_valid():
-            try:
-                claim.resubmit_evidence(form.cleaned_data["evidence"])
-            except ValueError as exc:
-                messages.error(request, f"Cannot resubmit: {exc}")
-                return redirect("claim_detail", pk=claim.pk)
-            form.save_attachments(claim)
-            messages.success(request, "Evidence resubmitted. Back to pending review.")
-            return redirect("claim_detail", pk=claim.pk)
-    else:
-        form = ClaimForm(instance=claim)
-    return render(request, "reports/claim_form.html", {"form": form, "report": claim.report,
-                                                       "claim": claim, "resubmit": True})
+    if claim.claimant_id != request.user.pk:
+        raise PermissionDenied
+    form = (ClaimForm(request.POST, request.FILES, instance=claim)
+            if request.method == "POST" else ClaimForm(instance=claim))
+    if request.method == "POST" and form.is_valid():
+        try:
+            services.resubmit_claim(request.user, pk, form.cleaned_data["evidence"],
+                                    form.cleaned_data["images"])
+        except ValidationError as exc:
+            form_error(form, exc)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("claim_detail", pk=pk)
+        else:
+            messages.success(request, "Evidence resubmitted.")
+            return redirect("claim_detail", pk=pk)
+    return render(request, "reports/claim_form.html", {
+        "form": form, "report": claim.report, "claim": claim, "resubmit": True,
+    })
 
 
 @login_required
 @require_POST
 def claim_withdraw(request, pk):
-    """REQ-1.12: claimant may withdraw only before handover."""
-    claim = get_object_or_404(Claim, pk=pk)
-    if claim.claimant != request.user:
-        return render(request, "403.html", status=403)
     try:
-        claim.withdraw(request.user)
+        services.act_on_claim(request.user, pk, "withdraw")
         messages.success(request, "Claim withdrawn.")
     except ValueError as exc:
         messages.error(request, f"Cannot withdraw: {exc}")
-    return redirect("claim_detail", pk=claim.pk)
+    return redirect("claim_detail", pk=pk)
 
 
+@login_required
+@require_safe
 def notices(request):
     return render(request, "notices.html", {"notices": Notice.objects.filter(user=request.user)})
 
 
 @login_required
+@require_POST
 def notice_read(request, pk):
-    notice = get_object_or_404(Notice, pk=pk, user=request.user)
-    notice.is_read = True
-    notice.save(update_fields=["is_read"])
-    if notice.link:
-        return redirect(notice.link)
-    return redirect("notices")
+    notice = services.mark_notice_read(request.user, pk)
+    return redirect(safe_path(notice.link, "notices"))
 
-
-# --------------------------------------------------------------------- #
-# Staff: moderation and queues (REQ-1.3/1.8/1.10/1.11/1.14)             #
-# --------------------------------------------------------------------- #
 
 @staff_required
+@require_safe
 def staff_dashboard(request):
-    context = {
+    return render(request, "staff/dashboard.html", {
         "pending_reports": Report.objects.filter(status="pending").count(),
         "close_requests": Report.objects.filter(status="close_requested").count(),
         "pending_claims": Claim.objects.filter(status="pending").count(),
-        "awaiting_evidence": Claim.objects.filter(status="awaiting_evidence").count(),
-        "awaiting_handover": Claim.objects.filter(status="awaiting_handover").count(),
-        "under_dispute": Claim.objects.filter(status="under_dispute").count(),
-        "handover_in_progress": Claim.objects.filter(status="handover_in_progress").count(),
-    }
-    return render(request, "staff/dashboard.html", context)
+        **{status: Claim.objects.filter(status=status).count() for status in (
+            "awaiting_evidence", "awaiting_handover", "under_dispute", "handover_in_progress",
+        )},
+    })
 
 
 @staff_required
+@require_safe
 def staff_report_queue(request):
     reports = Report.objects.filter(status__in=["pending", "close_requested"]).order_by("created_at")
+    for report in reports:
+        report.available_actions = [item for item in report_actions(request.user, report)
+                                    if item["key"] in Report.ACTION_LABELS]
     return render(request, "staff/report_queue.html", {"reports": reports})
 
 
 @staff_required
 @require_POST
 def staff_report_review(request, pk):
-    report = get_object_or_404(Report, pk=pk)
-    action = request.POST.get("action")
-    reason = request.POST.get("reason", "").strip()
     try:
-        report.review(request.user, action, reason)
+        report = services.review_report(request.user, pk, request.POST.get("action"),
+                                        request.POST.get("reason", ""))
         messages.success(request, f"Report {report.status}.")
-    except ValueError as exc:
+    except (ValueError, ValidationError) as exc:
         messages.error(request, f"Action failed: {exc}")
     return redirect("staff_report_queue")
 
 
+def claim_queue(request, states, template):
+    claims = (Claim.objects.filter(status__in=states).select_related("report")
+              .prefetch_related("attachments").order_by("created_at"))
+    for claim in claims:
+        claim.available_actions = [item for item in claim_actions(request.user, claim)
+                                   if item["key"] in Claim.ACTION_LABELS]
+    return render(request, template, {"claims": claims})
+
+
 @staff_required
+@require_safe
 def staff_claim_queue(request):
-    claims = Claim.objects.filter(status__in=["pending", "awaiting_evidence"]).order_by("created_at")
-    return render(request, "staff/claim_queue.html", {"claims": claims})
+    return claim_queue(request, ["pending", "awaiting_evidence"], "staff/claim_queue.html")
+
+
+@staff_required
+@require_safe
+def staff_handover_queue(request):
+    return claim_queue(request, Claim.RESERVED_STATES, "staff/handover_queue.html")
+
+
+def claim_action(request, pk, destination):
+    action = request.POST.get("action")
+    if action not in Claim.ACTION_LABELS:
+        messages.error(request, "Unknown action.")
+    else:
+        try:
+            confirmations = {
+                key: request.POST[key] if key == "safe_outcome" else request.POST[key] in ("on", "true")
+                for key in FIELDS if key in request.POST
+            }
+            services.act_on_claim(request.user, pk, action, request.POST.get("reason", ""),
+                                  confirmations=confirmations)
+            messages.success(request, "Action completed.")
+        except (ValueError, ValidationError) as exc:
+            messages.error(request, f"Action failed: {exc}")
+    return redirect(destination)
 
 
 @staff_required
 @require_POST
 def staff_claim_review(request, pk):
-    claim = get_object_or_404(Claim, pk=pk)
-    action = request.POST.get("action")
-    reason = request.POST.get("reason", "").strip()
-    try:
-        if action == "approve":
-            claim.approve(request.user, reason)
-            messages.success(request, f"Claim {claim.reference} approved.")
-        elif action == "reject":
-            claim.reject(request.user, reason)
-            messages.success(request, f"Claim {claim.reference} rejected.")
-        elif action == "request_evidence":
-            claim.request_evidence(request.user, reason)
-            messages.success(request, f"Evidence requested for {claim.reference}.")
-        else:
-            messages.error(request, "Unknown action.")
-    except ValueError as exc:
-        messages.error(request, f"Action failed: {exc}")
-    return redirect("staff_claim_queue")
-
-
-@staff_required
-def staff_handover_queue(request):
-    claims = Claim.objects.filter(
-        status__in=["awaiting_handover", "under_dispute", "handover_in_progress"]
-    ).order_by("created_at")
-    return render(request, "staff/handover_queue.html", {"claims": claims})
+    return claim_action(request, pk, "staff_claim_queue")
 
 
 @staff_required
 @require_POST
 def staff_handover_action(request, pk):
-    claim = get_object_or_404(Claim, pk=pk)
-    action = request.POST.get("action")
-    reason = request.POST.get("reason", "").strip()
-    try:
-        if action == "start_dispute":
-            claim.start_dispute(request.user, reason)
-            messages.success(request, f"Claim {claim.reference} moved to dispute review.")
-        elif action == "resolve_keep":
-            claim.resolve_dispute(request.user, approve=True, reason=reason)
-            messages.success(request, f"Dispute resolved; {claim.reference} returns to awaiting handover.")
-        elif action == "resolve_reject":
-            claim.resolve_dispute(request.user, approve=False, reason=reason)
-            messages.success(request, f"Dispute resolved; {claim.reference} rejected.")
-        elif action == "start_handover":
-            claim.start_handover(request.user)
-            messages.success(request, f"Handover started for {claim.reference}.")
-        elif action == "complete_handover":
-            claim.complete_handover(request.user)
-            messages.success(request, f"Handover completed for {claim.reference}; report closed.")
-        elif action == "interrupt_handover":
-            claim.interrupt_handover(request.user, reason)
-            messages.success(request, f"Handover interrupted safely for {claim.reference}.")
-        else:
-            messages.error(request, "Unknown action.")
-    except ValueError as exc:
-        messages.error(request, f"Action failed: {exc}")
-    return redirect("staff_handover_queue")
+    return claim_action(request, pk, "staff_handover_queue")
 
 
-# --------------------------------------------------------------------- #
-# Matches (REQ-1.6, Could)                                              #
-# --------------------------------------------------------------------- #
-
+@require_http_methods(["GET", "POST"])
 def matches(request):
-    """Suggest candidate matches and list existing suggestions."""
     if request.method == "POST":
-        for report in Report.objects.filter(status="approved"):
-            generate_matches(report)
+        if not request.user.is_authenticated:
+            return redirect("login")
+        services.regenerate_matches(request.user)
         messages.success(request, "Match suggestions regenerated.")
-    matches_qs = Match.objects.filter(
-        lost_report__status="approved", found_report__status="approved",
-    ).select_related("lost_report", "found_report").order_by("-score")[:100]
-    return render(request, "matches.html", {"matches": matches_qs})
+    return render(request, "matches.html", {"matches": services.public_matches()[:100]})
