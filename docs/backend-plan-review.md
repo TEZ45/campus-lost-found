@@ -6,6 +6,12 @@ Source requirement: Campus Lost and Found System URS, version 1.0,
 17 October 2026, especially Sections 6.4, 6.8, 6.9 and 8, DOM-1 to DOM-5,
 and acceptance checks A1 to A6. Issue 1 covers basic models and migrations.
 
+Retention update supplied by the user on 2026-11-11: private evidence is kept
+for 15 days after a final outcome, closed reports and final
+claims to 30 days, and action history to 45 days. These periods supersede the
+original durations throughout this plan. Other cleanup and backup windows
+remain as recorded in the supplied URS. Cleanup is still pending P1 work.
+
 This is a proposed implementation plan and risk review, not an implementation
 or release approval. Existing commits remain intact. The reviewed P1 commit
 was local and had not been merged into main or pushed at review time. An independent code
@@ -45,7 +51,7 @@ and optional feature improvements are excluded from the risk findings.
 | --- | --- | --- | --- |
 | R1 | P0, confirmed defect | Notice creation raises during completion. The completed state, report closure and related invalidations roll back, even though the physical item may already have been handed over. A5 is not met. | Persist business results and notification intent atomically; deliver notices separately with durable retry and deduplication. Correct the contrary tests. |
 | R2 | P0, confirmed control gap | The API accepts action and reason without an explicit record of the required custody or transfer confirmations. Any nonempty interruption reason currently permits a return to awaiting handover, after which withdrawal can release the reservation. The required physical conditions are not enforced as recorded attestations. | Require action-specific staff confirmations, record actor and server time, and keep uncertain handovers reserved. Human checks remain necessary; software cannot prove custody. |
-| R3 | P1, confirmed design conflict | No expiry process exists. Protected audit references prevent deleting 365-day business records while retaining 730-day history. A naive cleanup could erase history or active evidence; retaining proof text inside claims or snapshots could defeat the 90-day evidence limit. | Approve an explicit retention model and restricted cleanup path before destructive migrations. Cover text, files and derived copies, not only attachment rows. |
+| R3 | P1, confirmed design conflict | No expiry process exists. Protected audit references prevent deleting 30-day business records while retaining 45-day history. A naive cleanup could erase history or active evidence; retaining proof text inside claims or snapshots could defeat the 15-day evidence limit. | Approve an explicit retention model and restricted cleanup path before destructive migrations. Cover text, files and derived copies, not only attachment rows. |
 | R4 | P2 release gate, unverified operational controls | A restored database can predate a physical handover. Resuming collection without custody reconciliation could authorize a second release. A full disk or unsuitable deployment configuration can also interrupt persistence or expose private data. No verified deployment and recovery package is present. | Pause collection during recovery, reconcile records with custody, verify backups and target-database behavior, enforce storage quotas and validate production access controls before real operation. |
 
 R2 describes missing controls and a plausible failure path, not a claim that
@@ -144,9 +150,10 @@ not release the reservation. Exercise both API and retained HTML entry points.
    operations still cannot alter history. A restricted maintenance operation
    can detach expired object references and remove expired history under the
    approved policy. Do not solve the mismatch by cascading away history.
-5. Apply Section 6.8 retention: closed reports and final claims 365 days,
-   private evidence 90 days after final outcome, history 730 days. Keep evidence
-   needed by active cases. Remove expired live data within 7 days; protected
+   Include protected Notice and NotificationEvent references in this design.
+5. Apply the updated Section 6.8 retention: closed reports and final claims
+   30 days, private evidence 15 days after final outcome, history 45 days.
+   Keep evidence needed by active cases. Remove expired live data within 7 days; protected
    backup copies expire within 14 days. Confirm campus policy before operation.
    The proposed clock for business records starts at closure/finalization;
    the reviewer must confirm this interpretation with the requirement owner.
@@ -164,8 +171,9 @@ not release the reservation. Exercise both API and retained HTML entry points.
 
 P1 exit evidence: actual disputed evidence upload preserves dispute/reservation;
 required user relation is enforced in the database; fresh and upgrade migrations
-succeed; evidence expires without deleting active cases; 365-day deletion does
-not erase retained 730-day history; interrupted cleanup and quota races are safe.
+succeed; evidence expires after 15 days without deleting active-case evidence;
+30-day deletion does not erase retained 45-day history; interrupted cleanup
+and quota races are safe.
 
 ## P2 deployment and acceptance
 
