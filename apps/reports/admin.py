@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
 
-from .models import ActionHistory, Claim, Match, Notice, Report, UserProfile
+from .models import ActionHistory, Category, Claim, Match, Notice, Report, UserProfile
 from .permissions import is_service_staff
 
 
@@ -47,6 +47,13 @@ class ServiceReadOnlyAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name",)
 
 
 @admin.register(Report)

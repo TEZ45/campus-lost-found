@@ -98,4 +98,5 @@ def test_audit_migration_preserves_existing_records():
         preserved = current_apps.get_model("reports", "ActionHistory").objects.get(pk=entry.pk)
         assert (preserved.action, preserved.reason) == ("existing_event", "Keep this record")
     finally:
-        MigrationExecutor(connection).migrate([("reports", "0006_notification_outbox_and_confirmations")])
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())

@@ -16,8 +16,9 @@ from rest_framework.views import APIView
 
 from . import services
 from .forms import SearchForm
-from .models import ActionHistory, Claim, Notice, Report
+from .models import ActionHistory, Category, Claim, Notice, Report
 from .permissions import can_read_evidence, can_view_report, is_service_staff
+from .resource_guards import BusinessBusy
 from .serializers import (
     ActionInput,
     ClaimActionInput,
@@ -27,11 +28,13 @@ from .serializers import (
     LoginInput,
     MatchOutput,
     NoticeOutput,
+    ReasonInput,
     RegisterInput,
     ReportInput,
     ReportOutput,
     StrictSerializer,
 )
+from .storage_quota import storage_status
 
 
 class SessionWithCsrf(SessionAuthentication):
@@ -65,7 +68,11 @@ class BaseApi(APIView):
         return response
 
     def handle_exception(self, exc):
-        if isinstance(exc, ModelValidationError):
+        if isinstance(exc, BusinessBusy):
+            from rest_framework.exceptions import Throttled
+
+            exc = Throttled(wait=exc.retry_after, detail=str(exc))
+        elif isinstance(exc, ModelValidationError):
             exc = ValidationError(getattr(exc, "message_dict", None) or exc.messages)
         elif isinstance(exc, ObjectDoesNotExist):
             exc = Http404()
@@ -162,6 +169,15 @@ class Reports(BaseApi):
         return self.output(ReportOutput, report, request, status=201)
 
 
+class Categories(BaseApi):
+    def get(self, request):
+        pager = Pagination()
+        page = pager.paginate_queryset(
+            Category.objects.filter(is_active=True).values("id", "name"), request, view=self,
+        )
+        return pager.get_paginated_response(page)
+
+
 class OwnReports(BaseApi):
     def get(self, request):
         self.require_user(request)
@@ -183,7 +199,10 @@ class ReportDetail(BaseApi):
 
     def update(self, request, pk, partial):
         self.require_user(request)
-        data = self.input(ReportInput, request, partial=partial)
+        report = get_object_or_404(Report, pk=pk)
+        if not services.can_manage_report(request.user, report):
+            raise PermissionDenied
+        data = self.input(ReportInput, request, partial=partial, instance=report)
         report = services.update_report(request.user, pk, data)
         return self.output(ReportOutput, report, request)
 
@@ -191,8 +210,8 @@ class ReportDetail(BaseApi):
 class ReportClosure(BaseApi):
     def post(self, request, pk):
         self.require_user(request)
-        self.input(StrictSerializer, request)
-        report = services.request_report_closure(request.user, pk)
+        data = self.input(ReasonInput, request)
+        report = services.request_report_closure(request.user, pk, **data)
         return self.output(ReportOutput, report, request)
 
 
@@ -235,8 +254,8 @@ class ClaimResubmission(BaseApi):
 class ClaimWithdrawal(BaseApi):
     def post(self, request, pk):
         self.require_user(request)
-        self.input(StrictSerializer, request)
-        claim = services.act_on_claim(request.user, pk, "withdraw")
+        data = self.input(ReasonInput, request)
+        claim = services.act_on_claim(request.user, pk, "withdraw", **data)
         return self.output(ClaimOutput, claim, request)
 
 
@@ -279,6 +298,7 @@ class StaffDashboard(BaseApi):
     def get(self, request):
         self.require_staff(request)
         return Response({
+            "storage": storage_status(),
             "reports": dict(Report.objects.values_list("status").annotate(count=Count("pk"))),
             "claims": dict(Claim.objects.values_list("status").annotate(count=Count("pk"))),
         })

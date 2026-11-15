@@ -112,7 +112,7 @@ def test_report_management_uses_business_role(client, users, role, expected):
     client.force_login(users[role])
     assert client.get(reverse("report_edit", args=[report.pk])).status_code == expected
     assert client.get(reverse("report_close_request", args=[report.pk])).status_code == expected
-    response = client.post(reverse("report_close_request", args=[report.pk]))
+    response = client.post(reverse("report_close_request", args=[report.pk]), {"reason": "Item recovered"})
     assert response.status_code == (302 if expected == 200 else 403)
     report.refresh_from_db()
     assert report.status == ("close_requested" if expected == 200 else "approved")
@@ -203,7 +203,7 @@ def test_approval_checks_latest_claim_and_report(users):
     with pytest.raises(ValueError):
         stale.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     claim.resubmit_evidence()
-    report.review(users["service"], "close")
+    report.review(users["service"], "close", "Closure verified")
     with pytest.raises(ValueError):
         claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     with pytest.raises(ValueError):
@@ -272,7 +272,7 @@ def test_report_changes_cannot_interrupt_active_handover(client, users):
     claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     claim.start_handover(users["service"], confirmations={'identity_verified': True, 'custody_confirmed': True})
     client.force_login(users["owner"])
-    assert client.post(reverse("report_close_request", args=[report.pk])).status_code == 302
+    assert client.post(reverse("report_close_request", args=[report.pk]), {"reason": "Item recovered"}).status_code == 302
     assert client.post(reverse("report_edit", args=[report.pk]), {"item_name": "Changed"}).status_code == 302
     report.refresh_from_db()
     claim.refresh_from_db()
@@ -296,7 +296,7 @@ def test_report_closure_survives_partial_notice_delivery_failure(users, monkeypa
         return original_create(**kwargs)
 
     monkeypatch.setattr(Notice.objects, "create", fail_second_notice)
-    report.review(users["service"], "close")
+    report.review(users["service"], "close", "Closure verified")
     assert deliver_pending()["failed"] == 1
     report.refresh_from_db()
     claim.refresh_from_db()

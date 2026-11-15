@@ -8,6 +8,8 @@
     <p class="meta">Staff will review your request. Closing a found-item report invalidates its pending claims; closing a lost-item report does not affect claims.</p>
     <form method="post">
         {% csrf_token %}
+        <label for="closure_reason">Closure reason</label>
+        <textarea id="closure_reason" name="reason" maxlength="2000" required></textarea>
         <button type="submit" class="btn btn-warning">Confirm Closure Request</button>
         <a href="{% url 'report_detail' report.pk %}" style="margin-left: 0.5rem;">Cancel</a>
     </form>

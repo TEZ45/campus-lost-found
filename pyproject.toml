@@ -8,6 +8,7 @@ dependencies = [
     "djangorestframework>=3.15",
     "python-dotenv>=1.0",
     "pillow>=10.0",
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +20,7 @@ dev = [
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
+django_debug_mode = true
 python_files = ["test_*.py"]
 
 [tool.ruff]

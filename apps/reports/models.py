@@ -1,11 +1,51 @@
 from django.contrib.auth.models import User
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
 from .confirmations import confirmation_fields, validate_confirmations
+from .lifecycle_models import FileDeletion, StorageLedger  # noqa: F401
 from .permissions import is_service_staff
 from .storage import PrivateEvidenceStorage
+
+
+def validate_report_category(value):
+    """Require a category while retaining legacy, nonempty category names."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError("A category is required.")
+    return value.strip()
+
+
+def validate_report_submission(values, *, require_event_time=True):
+    """Shared business validation; nullable storage preserves unknown legacy times."""
+    errors = {}
+    try:
+        category = validate_report_category(values.get("category"))
+    except ValidationError as exc:
+        errors["category"] = exc.messages
+        category = None
+    if require_event_time and values.get("event_time") is None:
+        errors["event_time"] = ["The time the item was lost or found is required."]
+    if errors:
+        raise ValidationError(errors)
+    return category
+
+
+def validate_reason(reason, *, required=False):
+    if reason is None:
+        reason = ""
+    if not isinstance(reason, str):
+        raise ValueError("Reason must be text")  # noqa: TRY004 - business input validation contract
+    reason = reason.strip()
+    if len(reason) > 2000:
+        raise ValueError("Reason must contain at most 2000 characters")
+    if required and not reason:
+        raise ValueError("A reason is required")
+    return reason
+
+
+def require_reason(reason):
+    return validate_reason(reason, required=True)
 
 
 def _staff_actions(instance):
@@ -30,6 +70,33 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username}: {'service staff' if self.is_service_staff else 'user'}"
+
+
+class Category(models.Model):
+    """Administratively maintained category suggestions without rewriting legacy text."""
+
+    name = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name_plural = "categories"
+
+    def clean(self):
+        self.name = validate_report_category(self.name)
+
+    def __str__(self):
+        return self.name
+
+
+class ResourceLease(models.Model):
+    """Database-backed, token-owned leases for expensive shared operations."""
+
+    key = models.CharField(max_length=100, unique=True)
+    token = models.CharField(max_length=64)
+    expires_at = models.DateTimeField(db_index=True)
 
 
 class Report(models.Model):
@@ -57,14 +124,15 @@ class Report(models.Model):
         "reject": "Reject",
         "close": "Approve closure",
     }
-    REASON_REQUIRED = {"reject"}
+    REASON_REQUIRED = {"reject", "close"}
 
     report_type = models.CharField(max_length=10, choices=REPORT_TYPES)
     item_name = models.CharField(max_length=200)
-    category = models.CharField(max_length=100, blank=True, default="")
-    description = models.TextField(blank=True)
+    category = models.CharField(max_length=100)
+    description = models.TextField(blank=True, max_length=10000)
     location = models.CharField(max_length=200)
     event_date = models.DateField(help_text="Date the item was lost or found")
+    event_time = models.TimeField(null=True, blank=True, help_text="Time the item was lost or found")
     contact_name = models.CharField(max_length=100)
     contact_email = models.EmailField(blank=True)
     contact_phone = models.CharField(max_length=50, blank=True)
@@ -73,12 +141,20 @@ class Report(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    closed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    review_reason = models.TextField(default="", blank=True, max_length=2000)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"[{self.get_report_type_display()}] {self.item_name} ({self.get_status_display()})"
+
+    def clean(self):
+        self.category = validate_report_submission(
+            {"category": self.category, "event_time": self.event_time},
+            require_event_time=self._state.adding,
+        )
 
     def is_public(self):
         return self.status == "approved"
@@ -94,12 +170,14 @@ class Report(models.Model):
     def review(self, staff, action, reason=""):
         if not is_service_staff(staff):
             raise PermissionDenied
-        reason = reason.strip()
+        reason = validate_reason(reason)
         with transaction.atomic():
             report = Report.objects.select_for_update().get(pk=self.pk)
             previous = report.status
             if action not in report.STAFF_ACTIONS.get(previous, ()):
                 raise ValueError(f"{action} not allowed from {previous}")
+            if action in report.REASON_REQUIRED:
+                reason = require_reason(reason)
             if action in ("approve", "reject"):
                 if previous != "pending":
                     raise ValueError("Only pending reports may be approved or rejected")
@@ -112,11 +190,13 @@ class Report(models.Model):
                 if report.claims.filter(status="handover_in_progress").exists():
                     raise ValueError("Cannot close: a handover is in progress for this report")
                 for claim in report.claims.filter(status__in=Claim.BEFORE_HANDOVER):
-                    claim.invalidate(staff, "Report closed by staff")
+                    claim.invalidate(staff, reason)
                 report.status = "closed"
+                report.closed_at = timezone.now()
             else:
                 raise ValueError("Unknown action")
-            report.save(update_fields=["status", "updated_at"])
+            report.review_reason = reason
+            report.save(update_fields=["status", "closed_at", "review_reason", "updated_at"])
             history = ActionHistory.objects.create(
                 actor=staff, action=f"report_{report.status}", report=report,
                 previous_state=previous, new_state=report.status, reason=reason,
@@ -178,16 +258,23 @@ class Claim(models.Model):
         "complete_handover": "Complete handover",
         "interrupt_handover": "Interrupt (safe)",
     }
-    REASON_REQUIRED = {"reject", "resolve_reject", "interrupt_handover"}
+    REASON_REQUIRED = {
+        "reject", "request_evidence", "start_dispute", "resolve_keep", "resolve_reject",
+        "interrupt_handover",
+    }
+    REASON_REQUIRED_ACTIONS = {
+        "rejected", "evidence_requested", "dispute_started", "dispute_resolved",
+        "dispute_rejected", "handover_interrupted", "withdrawn", "invalidated",
+    }
 
     report = models.ForeignKey(Report, on_delete=models.CASCADE, related_name="claims")
     claimant = models.ForeignKey(
-        User, on_delete=models.CASCADE, null=True, blank=True, related_name="claims"
+        User, on_delete=models.PROTECT, related_name="claims"
     )
     claimant_name = models.CharField(max_length=100)
     claimant_email = models.EmailField()
     claimant_phone = models.CharField(max_length=50, blank=True)
-    evidence = models.TextField(help_text="Description proving ownership")
+    evidence = models.TextField(max_length=10000, help_text="Description proving ownership")
     status = models.CharField(max_length=25, choices=STATUS_CHOICES, default="pending")
     reviewed_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="reviewed_claims"
@@ -203,6 +290,9 @@ class Claim(models.Model):
     handover_completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    finalized_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    evidence_purged_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    current_reason = models.TextField(default="", blank=True, max_length=2000)
 
     class Meta:
         ordering = ["-created_at"]
@@ -241,6 +331,7 @@ class Claim(models.Model):
 
     def _apply(self, new_status, actor, action, allowed_from, reason="", result="", extras=None,
                confirmations=None):
+        reason = validate_reason(reason)
         with transaction.atomic():
             # All claim and report writes take the report lock first.
             report = Report.objects.select_for_update().get(pk=self.report_id)
@@ -252,6 +343,11 @@ class Claim(models.Model):
                 raise PermissionDenied
             if locked.status not in allowed_from:
                 raise ValueError(f"{action} not allowed from {locked.status}")
+            if action in self.REASON_REQUIRED_ACTIONS:
+                reason = require_reason(reason)
+            if action == "evidence_resubmitted" and locked.status == "under_dispute":
+                # Determine this from the locked row, never the caller's stale instance.
+                new_status = "under_dispute"
             confirmed = validate_confirmations(action, confirmations)
             if action in ("approved", "handover_started") and (
                 report.status != "approved" or report.report_type != "found"
@@ -261,18 +357,25 @@ class Claim(models.Model):
                 raise ValueError("Another claim already holds the reservation")
             old_status = locked.status
             locked.status = new_status
+            if action != "evidence_resubmitted":
+                locked.current_reason = reason
+            changed_at = timezone.now()
+            if new_status in self.FINAL_STATES:
+                locked.finalized_at = changed_at
             if actor is not None:
                 locked.reviewed_by = actor
-                locked.reviewed_at = timezone.now()
+                locked.reviewed_at = changed_at
             for field, value in (extras or {}).items():
                 setattr(locked, field, value)
-            locked.save(update_fields=["status", "reviewed_by", "reviewed_at",
+            locked.save(update_fields=["status", "reviewed_by", "reviewed_at", "finalized_at",
+                                       "current_reason",
                                        "updated_at"] + list((extras or {}).keys()))
             if new_status == "completed":
                 for other in report.claims.filter(status__in=self.BEFORE_HANDOVER):
                     other.invalidate(actor, "Found-item report completed")
                 report.status = "closed"
-                report.save(update_fields=["status", "updated_at"])
+                report.closed_at = changed_at
+                report.save(update_fields=["status", "closed_at", "updated_at"])
             history = ActionHistory.objects.create(
                 actor=actor, action=action, claim=locked, report=locked.report,
                 previous_state=old_status, new_state=new_status,
@@ -293,9 +396,14 @@ class Claim(models.Model):
         return self._apply("awaiting_evidence", staff, "evidence_requested", ("pending",), reason,
                            "Additional evidence requested")
 
-    def resubmit_evidence(self, evidence=None):
-        return self._apply("pending", self.claimant, "evidence_resubmitted",
-                           ("awaiting_evidence",), result="Evidence resubmitted",
+    def resubmit_evidence(self, evidence=None, *, actor=None):
+        if evidence is not None and (not isinstance(evidence, str) or not evidence.strip()):
+            raise ValidationError({"evidence": "Evidence is required."})
+        if evidence is not None and len(evidence) > 10000:
+            raise ValidationError({"evidence": "Evidence must contain at most 10000 characters."})
+        return self._apply("pending", actor if actor is not None else self.claimant,
+                           "evidence_resubmitted", ("awaiting_evidence", "under_dispute"),
+                           result="Evidence resubmitted",
                            extras={"evidence": evidence} if evidence is not None else None)
 
     def approve(self, staff, reason="", *, confirmations=None):
@@ -340,9 +448,9 @@ class Claim(models.Model):
                            ("handover_in_progress",), reason, "Interrupted safely, awaiting handover",
                            confirmations=confirmations)
 
-    def withdraw(self, user):
+    def withdraw(self, user, reason=""):
         return self._apply("withdrawn", user, "withdrawn", self.BEFORE_HANDOVER,
-                           result="Withdrawn by claimant")
+                           reason=reason, result="Withdrawn by claimant")
 
     def invalidate(self, staff, reason):
         return self._apply("invalidated", staff, "invalidated", self.BEFORE_HANDOVER,
@@ -414,6 +522,9 @@ class ActionHistoryQuerySet(models.QuerySet):
                     update_fields=None, unique_fields=None):
         if update_conflicts:
             raise ValueError("Action history is append-only")
+        objs = list(objs)
+        for obj in objs:
+            obj.populate_references()
         return super().bulk_create(
             objs, batch_size=batch_size, ignore_conflicts=ignore_conflicts,
             update_conflicts=False, update_fields=update_fields, unique_fields=unique_fields,
@@ -429,9 +540,11 @@ class ActionHistory(models.Model):
     action = models.CharField(max_length=50)
     claim = models.ForeignKey(Claim, on_delete=models.PROTECT, null=True, blank=True, related_name="history")
     report = models.ForeignKey(Report, on_delete=models.PROTECT, null=True, blank=True, related_name="history")
+    report_reference = models.CharField(max_length=100, blank=True, default="")
+    claim_reference = models.CharField(max_length=100, blank=True, default="")
     previous_state = models.CharField(max_length=25, blank=True, default="")
     new_state = models.CharField(max_length=25, blank=True, default="")
-    reason = models.TextField(blank=True, default="")
+    reason = models.TextField(blank=True, default="", max_length=2000)
     result = models.TextField(blank=True, default="")
     confirmations = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -444,8 +557,17 @@ class ActionHistory(models.Model):
     def save(self, *args, **kwargs):
         if not self._state.adding:
             raise ValueError("Action history is append-only")
+        self.populate_references()
         kwargs["force_insert"] = True
         return super().save(*args, **kwargs)
+
+    def populate_references(self):
+        if self.report_id:
+            self.report_reference = f"RPT-{self.report_id:06d}"
+        if self.claim_id:
+            self.claim_reference = f"CLM-{self.claim_id:06d}"
+            if not self.report_id:
+                self.report_reference = f"RPT-{self.claim.report_id:06d}"
 
     def delete(self, *args, **kwargs):
         raise ValueError("Action history is append-only")

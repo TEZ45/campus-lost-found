@@ -70,12 +70,12 @@ def can_withdraw(user, claim):
 
 
 def can_resubmit(user, claim):
-    """Claimant may resubmit only while evidence is awaited."""
+    """Claimants may supplement awaited evidence or an ongoing dispute."""
     return (
         user.is_authenticated
         and user.is_active
         and claim.claimant_id == user.id
-        and claim.status == "awaiting_evidence"
+        and claim.status in ("awaiting_evidence", "under_dispute")
     )
 
 
@@ -92,7 +92,7 @@ def report_actions(user, report):
         if report.status not in ("closed", "close_requested") and not reserved:
             actions.append({"key": "edit", "label": "Edit", "reason": False})
         if report.status not in ("closed", "close_requested") and not in_progress:
-            actions.append({"key": "request_close", "label": "Request closure", "reason": False})
+            actions.append({"key": "request_close", "label": "Request closure", "reason": True})
     if can_claim(user, report):
         actions.append({"key": "claim", "label": "Submit claim", "reason": False})
     return actions
@@ -112,5 +112,5 @@ def claim_actions(user, claim):
     if can_resubmit(user, claim):
         actions.append({"key": "resubmit", "label": "Resubmit evidence", "reason": False})
     if can_withdraw(user, claim):
-        actions.append({"key": "withdraw", "label": "Withdraw claim", "reason": False})
+        actions.append({"key": "withdraw", "label": "Withdraw claim", "reason": True})
     return actions

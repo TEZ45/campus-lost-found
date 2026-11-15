@@ -53,6 +53,7 @@ def make_report(user, report_type="found", item="Black Wallet", status="approved
         report_type=report_type, item_name=item, category=kw.pop("category", "Electronics"),
         description=kw.pop("description", "Found near the library"),
         location=kw.pop("location", "Library"), event_date=kw.pop("event_date", "2026-10-01"),
+        event_time=kw.pop("event_time", "10:00"),
         contact_name=kw.pop("contact_name", "Staff"), contact_email=kw.pop("contact_email", "s@e.com"),
         status=status, created_by=user, **kw,
     )
@@ -115,7 +116,7 @@ def test_a2_evidence_resubmission_returns_to_pending(client, staff_user, alice):
     claim.resubmit_evidence()
     assert claim.status == "pending"
     claim.approve(staff_user, confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
-    claim.start_dispute(staff_user, confirmations={'custody_confirmed': True})
+    claim.start_dispute(staff_user, "Ownership disputed", confirmations={'custody_confirmed': True})
     assert claim.status == "under_dispute"
 
 
@@ -163,7 +164,7 @@ def test_a3_handover_blocks_withdrawal_and_cancellation(client, staff_user, alic
 
     # Claimant withdraw must fail while handover is in progress.
     with pytest.raises(ValueError):
-        claim.withdraw(alice)
+        claim.withdraw(alice, "No longer needed")
     claim.refresh_from_db()
     assert claim.status == "handover_in_progress"
 
@@ -273,10 +274,10 @@ def test_claim_submission_creates_reference_and_history(client, alice, staff_use
 def test_withdraw_allowed_only_before_handover(client, staff_user, alice):
     report = make_report(alice)
     claim = make_claim(report, alice)
-    claim.withdraw(alice)
+    claim.withdraw(alice, "No longer needed")
     assert claim.status == "withdrawn"
     with pytest.raises(ValueError):
-        claim.withdraw(alice)  # final
+        claim.withdraw(alice, "No longer needed")  # final
 
 
 @pytest.mark.django_db

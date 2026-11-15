@@ -3,6 +3,7 @@
 {% block title %}{{ report.item_name }} - Campus Lost & Found{% endblock %}
 
 {% block content %}
+{% if can_manage and report.review_reason %}<p role="status">Review: {{ report.review_reason }}</p>{% endif %}
 <div class="card">
     <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">
         {{ report.get_report_type_display }}
@@ -10,7 +11,7 @@
     {% if report.category %}<span class="badge badge-status">{{ report.category }}</span>{% endif %}
     <span class="badge badge-status">Status: {{ report.get_status_display }}</span>
     <h1 style="margin: 0.5rem 0;">{{ report.item_name }}</h1>
-    <p class="meta">{{ report.location }} | {{ report.event_date }}</p>
+    <p class="meta">{{ report.location }} | {{ report.event_date }} {% if report.event_time %}{{ report.event_time|time:"H:i" }}{% endif %}</p>
     <hr style="margin: 1rem 0;">
     <p>{{ report.description }}</p>
     {% if report.photo %}

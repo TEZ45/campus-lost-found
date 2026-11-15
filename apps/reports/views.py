@@ -3,6 +3,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.paginator import Paginator
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -20,6 +21,9 @@ from .permissions import (
     report_actions,
     staff_required,
 )
+from .request_limits import guard_response
+from .resource_guards import BusinessBusy
+from .storage_quota import storage_status
 
 
 def form_error(form, error):
@@ -67,7 +71,12 @@ def report_list(request):
     form = SearchForm(request.GET)
     reports = (services.report_queryset(request.user, form.cleaned_data)
                if form.is_valid() else Report.objects.none())
-    return render(request, "reports/list.html", {"reports": reports, "form": form})
+    page = Paginator(reports, 20).get_page(request.GET.get("page"))
+    query = request.GET.copy()
+    query.pop("page", None)
+    return render(request, "reports/list.html", {
+        "reports": page.object_list, "page_obj": page, "page_query": query.urlencode(), "form": form,
+    })
 
 
 @require_safe
@@ -80,6 +89,7 @@ def report_detail(request, pk):
     )
     return render(request, "reports/detail.html", {
         "report": report, "matches": matches,
+        "can_manage": can_manage_report(request.user, report),
         "available_actions": [item["key"] for item in report_actions(request.user, report)],
     })
 
@@ -155,9 +165,9 @@ def report_close_request(request, pk):
         raise PermissionDenied
     if request.method == "POST":
         try:
-            services.request_report_closure(request.user, pk)
+            services.request_report_closure(request.user, pk, request.POST.get("reason", ""))
             messages.success(request, "Closure requested.")
-        except ValueError as exc:
+        except (ValueError, ValidationError) as exc:
             messages.error(request, str(exc))
         return redirect("report_detail", pk=pk)
     return render(request, "reports/confirm_close.html", {"report": report})
@@ -229,9 +239,9 @@ def claim_resubmit(request, pk):
 @require_POST
 def claim_withdraw(request, pk):
     try:
-        services.act_on_claim(request.user, pk, "withdraw")
+        services.act_on_claim(request.user, pk, "withdraw", request.POST.get("reason", ""))
         messages.success(request, "Claim withdrawn.")
-    except ValueError as exc:
+    except (ValueError, ValidationError) as exc:
         messages.error(request, f"Cannot withdraw: {exc}")
     return redirect("claim_detail", pk=pk)
 
@@ -239,7 +249,8 @@ def claim_withdraw(request, pk):
 @login_required
 @require_safe
 def notices(request):
-    return render(request, "notices.html", {"notices": Notice.objects.filter(user=request.user)})
+    page = Paginator(Notice.objects.filter(user=request.user), 20).get_page(request.GET.get("page"))
+    return render(request, "notices.html", {"notices": page.object_list, "page_obj": page})
 
 
 @login_required
@@ -253,6 +264,7 @@ def notice_read(request, pk):
 @require_safe
 def staff_dashboard(request):
     return render(request, "staff/dashboard.html", {
+        "storage": storage_status(),
         "pending_reports": Report.objects.filter(status="pending").count(),
         "close_requests": Report.objects.filter(status="close_requested").count(),
         "pending_claims": Claim.objects.filter(status="pending").count(),
@@ -266,10 +278,11 @@ def staff_dashboard(request):
 @require_safe
 def staff_report_queue(request):
     reports = Report.objects.filter(status__in=["pending", "close_requested"]).order_by("created_at")
-    for report in reports:
+    page = Paginator(reports, 20).get_page(request.GET.get("page"))
+    for report in page.object_list:
         report.available_actions = [item for item in report_actions(request.user, report)
                                     if item["key"] in Report.ACTION_LABELS]
-    return render(request, "staff/report_queue.html", {"reports": reports})
+    return render(request, "staff/report_queue.html", {"reports": page.object_list, "page_obj": page})
 
 
 @staff_required
@@ -287,10 +300,11 @@ def staff_report_review(request, pk):
 def claim_queue(request, states, template):
     claims = (Claim.objects.filter(status__in=states).select_related("report")
               .prefetch_related("attachments").order_by("created_at"))
-    for claim in claims:
+    page = Paginator(claims, 20).get_page(request.GET.get("page"))
+    for claim in page.object_list:
         claim.available_actions = [item for item in claim_actions(request.user, claim)
                                    if item["key"] in Claim.ACTION_LABELS]
-    return render(request, template, {"claims": claims})
+    return render(request, template, {"claims": page.object_list, "page_obj": page})
 
 
 @staff_required
@@ -340,6 +354,12 @@ def matches(request):
     if request.method == "POST":
         if not request.user.is_authenticated:
             return redirect("login")
-        services.regenerate_matches(request.user)
+        try:
+            services.regenerate_matches(request.user)
+        except BusinessBusy as exc:
+            return guard_response(request, 429, "throttled", str(exc), exc.retry_after)
+        except ValidationError as exc:
+            messages.error(request, "; ".join(exc.messages))
+            return redirect("matches")
         messages.success(request, "Match suggestions regenerated.")
     return render(request, "matches.html", {"matches": services.public_matches()[:100]})

@@ -20,8 +20,8 @@ def snapshot(root):
 
 def report_data(**changes):
     return {
-        "report_type": "found", "item_name": "Wallet", "location": "Library",
-        "event_date": "2026-10-01", "contact_name": "Owner", **changes,
+        "report_type": "found", "item_name": "Wallet", "category": "Electronics", "location": "Library",
+        "event_date": "2026-10-01", "event_time": "10:00", "contact_name": "Owner", **changes,
     }
 
 
