@@ -5,6 +5,7 @@ from . import api
 app_name = "reports_api"
 
 urlpatterns = [
+    path("categories/", api.Categories.as_view(), name="categories"),
     path("auth/csrf/", api.CsrfToken.as_view(), name="csrf"),
     path("auth/me/", api.CurrentUser.as_view(), name="me"),
     path("auth/register/", api.Register.as_view(), name="register"),

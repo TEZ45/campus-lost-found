@@ -2,8 +2,6 @@ import pytest
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
-from apps.reports.models import ActionHistory, Notice, NotificationEvent
-
 
 @pytest.mark.django_db(transaction=True)
 def test_outbox_migration_preserves_history_and_existing_notices():
@@ -21,6 +19,10 @@ def test_outbox_migration_preserves_history_and_existing_notices():
     )
     try:
         MigrationExecutor(connection).migrate(current)
+        current_apps = MigrationExecutor(connection).loader.project_state(current).apps
+        ActionHistory = current_apps.get_model("reports", "ActionHistory")
+        Notice = current_apps.get_model("reports", "Notice")
+        NotificationEvent = current_apps.get_model("reports", "NotificationEvent")
         retained_history = ActionHistory.objects.get(pk=history.pk)
         retained_notice = Notice.objects.get(pk=notice.pk)
         assert retained_history.confirmations == {}
@@ -29,4 +31,5 @@ def test_outbox_migration_preserves_history_and_existing_notices():
         assert retained_notice.event_id is None
         assert not NotificationEvent.objects.exists()
     finally:
-        MigrationExecutor(connection).migrate(current)
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())

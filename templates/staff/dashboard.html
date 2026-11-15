@@ -6,6 +6,14 @@
 <h1 style="margin-bottom: 1rem;">Staff Dashboard</h1>
 
 <div class="card">
+    <h2>Attachment storage</h2>
+    {% if storage.initialized %}
+    <p>{{ storage.used_bytes|filesizeformat }} used of {{ storage.capacity_bytes|filesizeformat }}.</p>
+    {% else %}<p>Storage usage is pending measurement.</p>{% endif %}
+    {% if storage.warning %}<p role="status">Attachment storage is at least 80 percent full. Contact the service administrator.</p>{% endif %}
+</div>
+
+<div class="card">
     <h2 style="margin-bottom: 0.75rem;">Queues</h2>
     <table>
         <tr><th>Queue</th><th>Pending</th><th></th></tr>

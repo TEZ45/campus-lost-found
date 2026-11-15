@@ -53,7 +53,7 @@ def test_concurrent_handover_and_withdrawal_have_one_winner(users):
     claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     results = race(
         (Claim, claim.pk, "start_handover", users["service"].pk, ()),
-        (Claim, claim.pk, "withdraw", users["claimant"].pk, ()),
+        (Claim, claim.pk, "withdraw", users["claimant"].pk, ("No longer needed",)),
     )
     assert sorted(results) == [False, True]
     claim.refresh_from_db()
@@ -67,7 +67,7 @@ def test_concurrent_handover_and_report_close_are_consistent(users):
     claim.approve(users["service"], confirmations={'evidence_reviewed': True, 'custody_confirmed': True})
     results = race(
         (Claim, claim.pk, "start_handover", users["service"].pk, ()),
-        (Report, report.pk, "review", users["service"].pk, ("close",)),
+        (Report, report.pk, "review", users["service"].pk, ("close", "Closure verified")),
     )
     assert sorted(results) == [False, True]
     claim.refresh_from_db()

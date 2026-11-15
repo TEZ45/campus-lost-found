@@ -3,6 +3,7 @@
 {% block title %}Claim {{ claim.reference }} - Campus Lost & Found{% endblock %}
 
 {% block content %}
+{% if claim.current_reason %}<p role="status">Current instruction or decision: {{ claim.current_reason }}</p>{% endif %}
 <div class="card">
     <h1 style="margin-bottom: 0.5rem;">Claim {{ claim.reference }}</h1>
     <p>
@@ -26,7 +27,8 @@
 
 {% if 'resubmit' in available_actions %}
 <div class="card">
-    <h2 style="margin-bottom: 0.5rem;">Staff requested additional evidence</h2>
+    <h2 style="margin-bottom: 0.5rem;">Submit additional evidence</h2>
+    {% if claim.status == 'under_dispute' %}<p>Evidence submission keeps collection paused and preserves the reservation.</p>{% endif %}
     {% if resubmit_form.errors %}
     <div class="form-errors">
         <ul>
@@ -55,6 +57,8 @@
 <div class="card">
     <form method="post" action="{% url 'claim_withdraw' claim.pk %}" onsubmit="return confirm('Withdraw this claim?');">
         {% csrf_token %}
+        <label for="withdraw_reason">Withdrawal reason</label>
+        <textarea id="withdraw_reason" name="reason" maxlength="2000" required></textarea>
         <button type="submit" class="btn btn-danger">Withdraw Claim</button>
     </form>
 </div>

@@ -2,10 +2,11 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.core.files.storage import FileSystemStorage
+
+from .managed_storage import ManagedFileSystemStorage
 
 
-class PrivateEvidenceStorage(FileSystemStorage):
+class PrivateEvidenceStorage(ManagedFileSystemStorage):
     @property
     def location(self):
         private = Path(settings.PRIVATE_MEDIA_ROOT).resolve()

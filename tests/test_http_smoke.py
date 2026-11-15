@@ -35,8 +35,8 @@ def test_session_and_report_flow_over_local_http(live_server, users):
     assert status == 200
     csrf = body["csrf_token"]
     status, report = request(browser, "reports/", {
-        "report_type": "found", "item_name": "HTTP wallet", "location": "Library",
-        "event_date": "2026-10-01", "contact_name": "Owner",
+        "report_type": "found", "item_name": "HTTP wallet", "category": "Electronics", "location": "Library",
+        "event_date": "2026-10-01", "event_time": "10:00", "contact_name": "Owner",
     }, csrf)
     assert status == 201
     assert report["status"] == "pending"

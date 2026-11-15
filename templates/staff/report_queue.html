@@ -6,6 +6,7 @@
 <h1 style="margin-bottom: 1rem;">Report Moderation</h1>
 
 {% for report in reports %}
+{% if report.review_reason %}<p>Current review or closure reason: {{ report.review_reason }}</p>{% endif %}
 <div class="card">
     <span class="badge {% if report.report_type == 'lost' %}badge-lost{% else %}badge-found{% endif %}">{{ report.get_report_type_display }}</span>
     <span class="badge badge-status">Status: {{ report.get_status_display }}</span>
@@ -24,4 +25,5 @@
 {% endfor %}
 
 <a href="{% url 'staff_dashboard' %}" class="btn" style="margin-top: 1rem;">Back to dashboard</a>
+{% include "pagination.html" %}
 {% endblock %}

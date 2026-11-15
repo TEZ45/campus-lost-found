@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404
 
 from .confirmations import REQUIRED
 from .forms import MAX_IMAGES_PER_CLAIM, MAX_IMAGES_PER_SUBMISSION, ReportForm, validate_image
+from .managed_storage import capture_upload_files
 from .models import ActionHistory, Claim, ClaimAttachment, Match, Notice, Report
 from .permissions import (
     can_manage_report,
@@ -19,9 +20,11 @@ from .permissions import (
     is_service_staff,
     report_actions,
 )
+from .resource_guards import work_budget
+from .storage_quota import cleanup_failed_uploads, queue_file_deletion, reserve_uploads
 
 PUBLIC_REPORT_FIELDS = (
-    "report_type", "item_name", "category", "description", "location", "event_date", "photo",
+    "report_type", "item_name", "category", "description", "location", "event_date", "event_time", "photo",
 )
 
 
@@ -36,6 +39,8 @@ def require_staff(actor):
 
 
 def require_action(actions, action, reason=""):
+    if not isinstance(reason, str) or len(reason) > 2000:
+        raise ValidationError({"reason": "Use at most 2000 characters."})
     selected = next((item for item in actions if item["key"] == action), None)
     if selected is None:
         raise ValueError("Action is not available in the current state")
@@ -43,10 +48,11 @@ def require_action(actions, action, reason=""):
         raise ValidationError({"reason": "A reason is required."})
 
 
-def record(action, actor, report, previous="", result="", claim=None):
+def record(action, actor, report, previous="", result="", claim=None, reason=""):
     ActionHistory.objects.create(
         actor=actor, action=action, report=report, claim=claim,
-        previous_state=previous, new_state=claim.status if claim else report.status, result=result,
+        previous_state=previous, new_state=claim.status if claim else report.status,
+        result=result, reason=reason,
     )
 
 
@@ -54,20 +60,20 @@ def record(action, actor, report, previous="", result="", claim=None):
 def stored_files():
     files = []
     try:
-        yield files
+        with capture_upload_files(files):
+            yield files
     except Exception:
-        for field in files:
-            field.storage.delete(field.name)
+        cleanup_failed_uploads(files)
         raise
 
 
-def set_report_data(report, data):
+def set_report_data(report, data, *, validate_photo=True):
     unknown = set(data) - set(ReportForm.Meta.fields)
     if unknown:
         raise ValidationError({key: "Unknown field." for key in unknown})
     for key, value in data.items():
         if key == "photo":
-            if value and not isinstance(value, FieldFile):
+            if validate_photo and value and not isinstance(value, FieldFile):
                 validate_image(value)
             value = value or ""
         setattr(report, key, value)
@@ -76,73 +82,80 @@ def set_report_data(report, data):
 
 def create_report(actor, data):
     require_user(actor)
-    with stored_files() as files, transaction.atomic():
-        report = Report(created_by=actor, status="pending")
-        set_report_data(report, data)
+    if not data.get("event_time"):
+        raise ValidationError({"event_time": "The event time is required."})
+    report = Report(created_by=actor, status="pending")
+    set_report_data(report, data)
+    with stored_files(), transaction.atomic():
         new_photo = bool(report.photo and not report.photo._committed)
-        try:
-            report.save()
-        finally:
-            if new_photo and report.photo._committed:
-                files.append(report.photo)
+        if new_photo:
+            reserve_uploads([report.photo.file])
+        report.save()
         record("report_submitted", actor, report)
         return report
 
 
 def update_report(actor, report_id, data):
     require_user(actor)
-    with stored_files() as files, transaction.atomic():
+    preview = get_object_or_404(Report, pk=report_id)
+    if not can_manage_report(actor, preview):
+        raise PermissionDenied
+    photo = data.get("photo")
+    if photo and not isinstance(photo, FieldFile):
+        validate_image(photo)
+    with stored_files(), transaction.atomic():
         report = get_object_or_404(Report.objects.select_for_update(), pk=report_id)
         if not can_manage_report(actor, report):
             raise PermissionDenied
         require_action(report_actions(actor, report), "edit")
         previous = report.status
         before = {key: getattr(report, key) for key in PUBLIC_REPORT_FIELDS}
-        set_report_data(report, data)
+        old_photo = (report.photo.storage, report.photo.name) if report.photo else None
+        set_report_data(report, data, validate_photo=False)
         public_changed = any(before[key] != getattr(report, key) for key in PUBLIC_REPORT_FIELDS)
         new_photo = bool(report.photo and not report.photo._committed)
+        if new_photo:
+            reserve_uploads([report.photo.file])
         if previous == "rejected" or (previous == "approved" and (public_changed or new_photo)):
             report.status = "pending"
-        try:
-            report.save()
-        finally:
-            if new_photo and report.photo._committed:
-                files.append(report.photo)
+        report.save()
+        if old_photo and (not report.photo or old_photo[1] != report.photo.name):
+            queue_file_deletion(*old_photo)
         record("report_edited", actor, report, previous, "Saved")
         return report
 
 
 @transaction.atomic
-def request_report_closure(actor, report_id):
+def request_report_closure(actor, report_id, reason=""):
     require_user(actor)
     report = get_object_or_404(Report.objects.select_for_update(), pk=report_id)
     if not can_manage_report(actor, report):
         raise PermissionDenied
-    require_action(report_actions(actor, report), "request_close")
+    require_action(report_actions(actor, report), "request_close", reason)
+    if not reason.strip():
+        raise ValidationError({"reason": "A closure reason is required."})
     previous = report.status
     report.status = "close_requested"
-    report.save(update_fields=["status", "updated_at"])
-    record("close_requested", actor, report, previous)
+    report.review_reason = reason.strip()
+    report.save(update_fields=["status", "review_reason", "updated_at"])
+    record("close_requested", actor, report, previous, reason=reason.strip())
     return report
 
 
 def validate_evidence(evidence, images, existing=0):
-    if not isinstance(evidence, str) or not evidence.strip():
-        raise ValidationError({"evidence": "Evidence is required."})
+    if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 10000:
+        raise ValidationError({"evidence": "Evidence is required, up to 10000 characters."})
     if len(images) > MAX_IMAGES_PER_SUBMISSION or existing + len(images) > MAX_IMAGES_PER_CLAIM:
         raise ValidationError({"images": "At most 3 images per submission and 5 per claim."})
     for image in images:
         validate_image(image)
 
 
-def save_attachments(claim, images, files):
+def save_attachments(claim, images):
+    reserve_uploads(images)
     for image in images:
         attachment = ClaimAttachment(claim=claim, image=image)
-        try:
-            attachment.save()
-        finally:
-            if attachment.image._committed:
-                files.append(attachment.image)
+        attachment.save()
 
 
 def create_claim(actor, report_id, data, images=()):
@@ -151,14 +164,14 @@ def create_claim(actor, report_id, data, images=()):
         raise ValidationError("Only evidence may be supplied for a claim.")
     images = list(images)
     validate_evidence(data.get("evidence"), images)
-    with stored_files() as files, transaction.atomic():
+    with stored_files(), transaction.atomic():
         report = get_object_or_404(Report.objects.select_for_update(), pk=report_id, report_type="found")
         require_action(report_actions(actor, report), "claim")
         claim = Claim.objects.create(
             report=report, claimant=actor, claimant_name=actor.get_full_name() or actor.username,
             claimant_email=actor.email, evidence=data["evidence"].strip(), status="pending",
         )
-        save_attachments(claim, images, files)
+        save_attachments(claim, images)
         record("claim_submitted", actor, report, claim=claim)
         return claim
 
@@ -172,14 +185,16 @@ def locked_claim(claim_id):
 def resubmit_claim(actor, claim_id, evidence, images=()):
     require_user(actor)
     images = list(images)
-    with stored_files() as files, transaction.atomic():
+    validate_evidence(evidence, images)
+    with stored_files(), transaction.atomic():
         claim = locked_claim(claim_id)
         if claim.claimant_id != actor.pk:
             raise PermissionDenied
         require_action(claim_actions(actor, claim), "resubmit")
-        validate_evidence(evidence, images, claim.attachments.count())
-        claim.resubmit_evidence(evidence.strip())
-        save_attachments(claim, images, files)
+        if claim.attachments.count() + len(images) > MAX_IMAGES_PER_CLAIM:
+            raise ValidationError({"images": "At most 5 images per claim."})
+        claim.resubmit_evidence(evidence.strip(), actor=actor)
+        save_attachments(claim, images)
         return claim
 
 
@@ -215,7 +230,7 @@ def act_on_claim(actor, claim_id, action, reason="", confirmations=None):
     if action in ("reject", "request_evidence"):
         return getattr(claim, action)(actor, reason)
     if action == "withdraw":
-        return claim.withdraw(actor)
+        return claim.withdraw(actor, reason)
     raise ValueError("Unknown action")
 
 
@@ -242,6 +257,10 @@ def open_claim_attachment(actor, attachment_id):
 
 
 def report_queryset(actor, filters):
+    for field, maximum in {"q": 200, "category": 100, "location": 200}.items():
+        value = filters.get(field)
+        if value is not None and (not isinstance(value, str) or len(value) > maximum):
+            raise ValidationError({field: f"Use at most {maximum} characters."})
     reports = Report.objects.all()
     if not is_service_staff(actor):
         reports = reports.filter(status="approved")
@@ -280,19 +299,31 @@ def match_score(first, second):
     return min(round(score, 2), 1.0), "; ".join(reasons)
 
 
-@transaction.atomic
 def regenerate_matches(actor):
     require_staff(actor)
-    lost = list(Report.objects.filter(report_type="lost", status="approved"))
-    found = list(Report.objects.filter(report_type="found", status="approved"))
-    generated = 0
-    for first in lost:
-        for second in found:
-            score, reason = match_score(first, second)
-            pair = {"lost_report": first, "found_report": second}
-            if score > 0:
-                Match.objects.update_or_create(**pair, defaults={"score": score, "reason": reason})
-                generated += 1
-            else:
-                Match.objects.filter(**pair, status="suggested").delete()
-    return generated
+    maximum = getattr(settings, "MATCH_MAX_PAIRS", 2500)
+    with work_budget("match-generation") as check_budget, transaction.atomic():
+        lost = Report.objects.filter(report_type="lost", status="approved")
+        found = Report.objects.filter(report_type="found", status="approved")
+        if lost.count() * found.count() > maximum:
+            raise ValidationError("Too many matching pairs for one request.")
+        check_budget()
+        lost = list(lost[:maximum + 1])
+        found = list(found[:maximum + 1])
+        if len(lost) * len(found) > maximum:
+            raise ValidationError("Too many matching pairs for one request.")
+        check_budget()
+        generated = 0
+        for first in lost:
+            for second in found:
+                check_budget()
+                score, reason = match_score(first, second)
+                pair = {"lost_report": first, "found_report": second}
+                if score > 0:
+                    Match.objects.update_or_create(**pair, defaults={"score": score, "reason": reason})
+                    generated += 1
+                else:
+                    Match.objects.filter(**pair, status="suggested").delete()
+                check_budget()
+        check_budget()
+        return generated

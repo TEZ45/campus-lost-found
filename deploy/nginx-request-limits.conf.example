@@ -1,0 +1,92 @@
+# Include in nginx's http context. This is a starting point to measure and tune,
+# not a capacity claim. In particular, keep campus NATs with 200 active users in
+# mind when changing per-IP rates, bursts or connection caps.
+#
+# Keep the Django listener private (127.0.0.1:8000 here). Configure the app with:
+# REQUEST_LIMITS_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+# REQUEST_LIMITS_REDIS_URL=redis://<shared-primary>:6379/1
+# Redis must use noeviction; restarts/flushes reset fixed-window request budgets.
+# All app workers must use the same cache URL and KEY_PREFIX.
+#
+# Configure TLS for your deployment before exposing this example publicly.
+# Django ASGI can spool a body before middleware, so an upstream body cap is
+# required. 17m allows three 5 MiB files plus 2 MiB of multipart/form overhead.
+# Django separately caps the aggregate file content at 15 MiB.
+
+limit_req_zone $binary_remote_addr zone=campus_request_ip:10m rate=100r/s;
+limit_conn_zone $binary_remote_addr zone=campus_connection_ip:10m;
+limit_conn_zone $server_name zone=campus_connection_server:1m;
+
+server {
+    listen 8080;
+    server_name lost-found.example.invalid;
+
+    client_max_body_size 17m;
+    client_body_buffer_size 128k;
+    client_header_timeout 15s;
+    client_body_timeout 15s;
+    send_timeout 30s;
+    keepalive_timeout 15s;
+
+    # These edge values are coarse admission caps. Django applies shared atomic
+    # IP/account and endpoint budgets. Tune both sets using observed traffic,
+    # request latency, memory, disk and CPU measurements from the actual server.
+    limit_req zone=campus_request_ip burst=400 nodelay;
+    limit_req_status 429;
+    limit_conn campus_connection_ip 300;
+    limit_conn campus_connection_server 600;
+    limit_conn_status 429;
+
+    proxy_request_buffering on;
+    proxy_connect_timeout 3s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Overwrite XFF above: arbitrary client-supplied chains are never forwarded.
+    # If another load balancer fronts nginx, configure set_real_ip_from only for
+    # its exact verified networks before enabling real_ip_header/recursive.
+    # Never trust 0.0.0.0/0 or ::/0. This example enables no real-IP trust.
+
+    error_page 429 = @html_rate_limited;
+    error_page 413 = @html_body_too_large;
+
+    location /api/ {
+        error_page 429 = @api_rate_limited;
+        error_page 413 = @api_body_too_large;
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location @api_rate_limited {
+        default_type application/json;
+        add_header Retry-After 1 always;
+        add_header Cache-Control "private, no-store" always;
+        return 429 '{"error":{"code":"rate_limited","details":"Too many requests. Please retry later."}}';
+    }
+
+    location @html_rate_limited {
+        default_type text/plain;
+        add_header Retry-After 1 always;
+        add_header Cache-Control "private, no-store" always;
+        return 429 "Too many requests. Please retry later.\n";
+    }
+
+    location @api_body_too_large {
+        default_type application/json;
+        add_header Cache-Control "private, no-store" always;
+        return 413 '{"error":{"code":"request_too_large","details":"Request body is too large."}}';
+    }
+
+    location @html_body_too_large {
+        default_type text/plain;
+        add_header Cache-Control "private, no-store" always;
+        return 413 "Request body is too large.\n";
+    }
+}

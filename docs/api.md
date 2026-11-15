@@ -21,6 +21,7 @@ CSRF failures return 403. Unauthenticated protected reads return 401.
 | POST | `auth/register/` | Register with username, password1, password2 |
 | POST | `auth/login/` | Login with username and password |
 | POST | `auth/logout/` | End session |
+| GET | `categories/` | Paginated active category suggestions |
 | GET, POST | `reports/` | Search visible reports or submit one |
 | GET | `reports/mine/` | Own reports, including nonpublic reports |
 | GET, PUT, PATCH | `reports/{id}/` | Read or update an authorised report |
@@ -46,8 +47,10 @@ CSRF failures return 403. Unauthenticated protected reads return 401.
 ## Inputs and outputs
 
 Report writes accept `report_type`, `item_name`, `category`, `description`,
-`location`, `event_date`, `contact_name`, `contact_email`, `contact_phone`, and
-`photo`. Dates use `YYYY-MM-DD`. PUT sends all required report fields; PATCH
+`location`, `event_date`, `event_time`, `contact_name`, `contact_email`, `contact_phone`, and
+`photo`. Category and event time are required on creation and PUT. Dates use
+`YYYY-MM-DD`; event time uses campus-local `HH:MM[:SS]` in Asia/Shanghai.
+Unknown legacy times remain null until supplied. PUT sends all required report fields; PATCH
 keeps omitted fields. `photo: null` clears the photo. Send image uploads using
 multipart form data. Claim writes accept `evidence` and repeated `images`
 parts, up to three images per request and five per claim.
@@ -56,10 +59,30 @@ Review requests accept `action` and optional `reason`. Report actions are
 `approve`, `reject`, `close`. Staff claim actions are `approve`, `reject`,
 `request_evidence`, `start_dispute`, `resolve_keep`, `resolve_reject`,
 `start_handover`, `complete_handover`, `interrupt_handover`. Rejection and safe
-interruption require a reason. Consult each resource's `allowed_actions`
+interruption, evidence requests, dispute start/outcomes and report closure
+require a reason. Closure requests and claimant withdrawals accept
+`{"reason": "..."}` and reject a missing or blank reason. Consult each resource's `allowed_actions`
 array of `{key, label, reason, confirmations}` before rendering staff controls.
 User actions may omit `confirmations`. The server checks
 the action again inside the transaction.
+
+Evidence is limited to 10000 characters, reasons to 2000, and report descriptions
+to 10000. Search limits are 200 for `q`, 100 for `category` and 200 for `location`.
+Images remain JPEG/PNG, at most 5 MiB each; decoded images are limited to
+20 million pixels by default. New image submissions remain at most three
+images per request and five per claim. Aggregate file data is limited to
+15 MiB and the total body to 17 MiB. Exceeding either stream budget returns 413.
+
+Evidence resubmission from `awaiting_evidence` returns to `pending`; from
+`under_dispute` it stays disputed and retains the reservation. Claim responses
+include `finalized_at`, `evidence_purged_at` and handover actor/time fields.
+After evidence expiry, text is empty and attachments disappear; the expiry
+marker explains this result. Report responses include `closed_at`. Audit
+history has stable report/claim references even after those objects expire.
+`current_reason` on private claim responses and `review_reason` for report
+managers preserve current instructions while a case remains active, even
+after older audit history expires. They are scrubbed with final evidence;
+report reasons are never exposed to unrelated public readers.
 
 Staff claim actions also accept a `confirmations` object. Boolean values must
 be JSON `true`, supplied explicitly by the operator. Missing, false, unknown
@@ -104,3 +127,20 @@ Errors use `{error: {code, details}}`: invalid input 400, authentication 401,
 permission or CSRF 403, missing/inaccessible report 404, method 405, and state
 conflict 409. Refresh a resource after a conflict before retrying. Evidence
 downloads use an attachment disposition and private, no-store caching.
+
+## Request and work budgets
+
+API and HTML routes enforce shared IP and authenticated-account windows,
+including separate login, registration, search, write and upload budgets.
+Rate rejection returns 429 with `Retry-After`; unavailable limit accounting
+returns 503 rather than silently accepting work. Wait before retrying and
+query saved status before repeating a business action.
+
+Matching regeneration has a shared lease, a default 30-second cooldown,
+2500-pair cap and a 10-second cooperative processing budget. Busy/deadline
+rejections return 429; too many pairs returns 400. These caps do not replace
+database statement timeouts or upstream DDoS protection.
+
+Staff dashboard responses include storage capacity, accounted usage,
+initialization state and an 80-percent warning. Uploads exceeding the
+configured capacity are rejected before permanent storage writes.

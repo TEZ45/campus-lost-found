@@ -1,6 +1,23 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def request_counter_isolation(settings):
+    settings.CACHES = {
+        **settings.CACHES,
+        "request_limits": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "isolated-request-limits",
+        },
+    }
+    from django.core.cache import caches
+
+    counter = caches["request_limits"]
+    counter.clear()
+    yield
+    counter.clear()
+
+
 @pytest.fixture(scope="session")
 def django_db_modify_db_settings(django_db_modify_db_settings_parallel_suffix, tmp_path_factory):
     from django.conf import settings

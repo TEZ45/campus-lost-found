@@ -92,7 +92,9 @@ Tests use temporary media directories and a temporary SQLite file. Concurrent
 workflow tests use separate database connections. SQLite write transactions
 use `IMMEDIATE` mode; PostgreSQL deployment still needs separate validation.
 Passing tests do not establish complete URS acceptance. Disputed evidence
-submission, retention and deployment validation remain follow-up work.
+submission and retention are implemented in the P1 review branch. Deployment
+validation remains follow-up work. See [the schema](docs/schema.md) and
+[the P1 review](docs/p1-abuse-review.md) for migrations, limits and maintenance.
 
 ### API and business rules
 
@@ -152,5 +154,8 @@ campus-lost-found/
 ## Team Collaboration
 
 All four members contribute to development, testing, and documentation.
-Feature changes use separate branches and local merges after review.
+Feature changes use separate branches. After local validation and authorization
+to publish, push the feature branch and open a GitHub pull request for team
+review. Merge on GitHub after review and checks; synchronize local main with
+`git pull --ff-only`. Do not merge feature branches into main locally.
 

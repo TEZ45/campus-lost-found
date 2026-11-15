@@ -45,6 +45,7 @@ def make_report(user, report_type="found", item="Black Wallet", status="approved
         report_type=report_type, item_name=item, category=kw.pop("category", "Electronics"),
         description=kw.pop("description", "Found near the library"),
         location=kw.pop("location", "Library"), event_date=kw.pop("event_date", "2026-10-01"),
+        event_time=kw.pop("event_time", "10:00"),
         contact_name=kw.pop("contact_name", "Staff"), contact_email=kw.pop("contact_email", "hidden@x.com"),
         contact_phone=kw.pop("contact_phone", "123456"),
         status=status, created_by=user, **kw,
@@ -161,7 +162,7 @@ def test_owner_edit_returns_public_report_to_pending(client, alice, bob, staff_u
     client.force_login(alice)
     client.post(reverse("report_edit", args=[report.pk]),
                 {"report_type": "found", "item_name": "Renamed Item", "category": "Electronics",
-                 "description": "d", "location": "Library", "event_date": "2026-10-01",
+                 "description": "d", "location": "Library", "event_date": "2026-10-01", "event_time": "10:00",
                  "contact_name": "A", "contact_email": "a@e.com"})
     report.refresh_from_db()
     assert report.status == "pending"  # changed public content requires another review (REQ-1.4)
@@ -172,7 +173,7 @@ def test_owner_edit_returns_public_report_to_pending(client, alice, bob, staff_u
 def test_close_request_flow(client, staff_user, alice):
     report = make_report(alice, status="approved")
     client.force_login(alice)
-    client.post(reverse("report_close_request", args=[report.pk]))
+    client.post(reverse("report_close_request", args=[report.pk]), {"reason": "Item recovered"})
     report.refresh_from_db()
     assert report.status == "close_requested"
 
@@ -244,7 +245,7 @@ def test_report_attachment_single_image(client, alice):
     client.force_login(alice)
     resp = client.post(reverse("report_create"),
                        {"report_type": "found", "item_name": "Umbrella", "category": "Other",
-                        "description": "d", "location": "Canteen", "event_date": "2026-10-01",
+                        "description": "d", "location": "Canteen", "event_date": "2026-10-01", "event_time": "10:00",
                         "contact_name": "A", "contact_email": "a@e.com", "photo": img("p.png")})
     assert resp.status_code == 302
     report = Report.objects.get(item_name="Umbrella")

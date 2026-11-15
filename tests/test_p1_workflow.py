@@ -17,7 +17,7 @@ def report_data(report, **changes):
     return {
         "report_type": report.report_type, "item_name": report.item_name,
         "category": report.category, "description": report.description,
-        "location": report.location, "event_date": "2026-10-01",
+        "location": report.location, "event_date": "2026-10-01", "event_time": "10:00",
         "contact_name": report.contact_name, "contact_email": report.contact_email,
         "contact_phone": report.contact_phone, **changes,
     }
@@ -153,7 +153,8 @@ def test_closed_report_cannot_be_reopened_through_any_service(users):
     assert not ActionHistory.objects.exists()
 
 
-def test_matching_updates_existing_scores_without_changing_claims(users):
+def test_matching_updates_existing_scores_without_changing_claims(users, settings):
+    settings.MATCH_COOLDOWN_SECONDS = 0
     lost = make_report(users["owner"], report_type="lost", item="Black blue wallet")
     found = make_report(users["owner"], item="Black blue wallet")
     claim = make_claim(found, users["claimant"])

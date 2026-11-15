@@ -2,10 +2,11 @@ import warnings
 from pathlib import Path
 
 from django import forms
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from PIL import Image
 
-from .models import Claim, Report
+from .models import Category, Claim, Report, validate_report_category
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # CAP-3.1: 5 MB per image
 ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"]
@@ -24,6 +25,8 @@ def validate_image(image):
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             image.seek(0)
             with Image.open(image) as decoded:
+                if decoded.width * decoded.height > getattr(settings, "MAX_IMAGE_PIXELS", 20000000):
+                    raise ValidationError("Image dimensions exceed the allowed pixel limit.")
                 expected = {"JPEG": ("image/jpeg", {".jpg", ".jpeg"}),
                             "PNG": ("image/png", {".png"})}.get(decoded.format)
                 if (
@@ -76,11 +79,25 @@ class MultipleImageField(forms.FileField):
 
 class ReportForm(forms.ModelForm):
     photo = SingleImageField(required=False)
+    category = forms.CharField(max_length=100, required=True)
+    event_time = forms.TimeField(required=True, widget=forms.TimeInput(attrs={"type": "time"}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        names = list(Category.objects.filter(is_active=True).values_list("name", flat=True))
+        if self.instance.pk and self.instance.category and self.instance.category not in names:
+            names.append(self.instance.category)
+        self.fields["category"].widget = forms.Select(
+            choices=[("", "Choose a category")] + [(name, name) for name in names],
+        )
+
+    def clean_category(self):
+        return validate_report_category(self.cleaned_data["category"])
 
     class Meta:
         model = Report
         fields = ["report_type", "item_name", "category", "description", "location",
-                  "event_date", "contact_name", "contact_email", "contact_phone", "photo"]
+                  "event_date", "event_time", "contact_name", "contact_email", "contact_phone", "photo"]
         widgets = {
             "event_date": forms.DateInput(attrs={"type": "date"}),
             "description": forms.Textarea(attrs={"rows": 4}),
@@ -112,12 +129,12 @@ class ClaimForm(forms.ModelForm):
         return cleaned
 
 class SearchForm(forms.Form):
-    q = forms.CharField(required=False, label="Keyword")
+    q = forms.CharField(required=False, max_length=200, label="Keyword")
     report_type = forms.ChoiceField(
         required=False, choices=[("", "Any type"), ("lost", "Lost Item"), ("found", "Found Item")]
     )
-    category = forms.CharField(required=False, label="Category")
-    location = forms.CharField(required=False, label="Location")
+    category = forms.CharField(required=False, max_length=100, label="Category")
+    location = forms.CharField(required=False, max_length=200, label="Location")
     date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     status = forms.ChoiceField(

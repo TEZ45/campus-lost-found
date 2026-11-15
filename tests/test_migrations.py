@@ -12,16 +12,17 @@ def test_reservation_migration_preserves_existing_conflicts():
     apps = executor.loader.project_state(previous).apps
     Report = apps.get_model("reports", "Report")
     Claim = apps.get_model("reports", "Claim")
+    user = apps.get_model("auth", "User").objects.create(username="migration-claimant")
     report = Report.objects.create(
         report_type="found", item_name="Wallet", location="Library",
         event_date="2026-10-01", contact_name="Staff", status="approved",
     )
     first = Claim.objects.create(
-        report=report, claimant_name="One", claimant_email="one@example.com",
+        report=report, claimant_id=user.pk, claimant_name="One", claimant_email="one@example.com",
         evidence="Proof", status="awaiting_handover",
     )
     second = Claim.objects.create(
-        report=report, claimant_name="Two", claimant_email="two@example.com",
+        report=report, claimant_id=user.pk, claimant_name="Two", claimant_email="two@example.com",
         evidence="Proof", status="under_dispute",
     )
     try:
@@ -32,4 +33,5 @@ def test_reservation_migration_preserves_existing_conflicts():
         assert (first.status, second.status) == ("awaiting_handover", "under_dispute")
     finally:
         Claim.objects.filter(pk=second.pk).update(status="withdrawn")
-        MigrationExecutor(connection).migrate([("reports", "0006_notification_outbox_and_confirmations")])
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())

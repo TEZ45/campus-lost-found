@@ -1,5 +1,10 @@
 # Backend plan for independent review
 
+Implementation update on 2026-11-15: the local P1/request-protection work is
+described in [the current review](p1-abuse-review.md), including 605 passing
+tests and deployment limits. The baseline findings below remain a historical
+review; do not interpret them as the current implementation status.
+
 Review date: 2026-11-10.
 Baseline: `ab3724a1049c823757367f653f4a3e9908af426b`, branch `fix/p1-backend`.
 Source requirement: Campus Lost and Found System URS, version 1.0,
@@ -183,6 +188,12 @@ and quota races are safe.
 2. Lock dependencies and provide a production configuration with a strong
    secret, DEBUG disabled, HTTPS and secure cookies. Private media must never
    be directly served by the proxy; report-photo visibility must remain enforced.
+   Separate runtime database credentials from migration credentials. The
+   runtime role must not own schemas/tables, inherit the owner/migration role,
+   or have schema-creation privileges. Grant only required data and sequence
+   access; keep migration credentials outside web/worker processes. Verify
+   normal workflows succeed and CREATE/ALTER/DROP fail in a disposable target
+   database. SQLite file permissions do not provide this role separation.
 3. Verify daily full and hourly incremental backups, protected separately and
    retained 14 days. Restore reports, evidence and handover records. Demonstrate
    RPO at most 1 hour and RTO at most 4 hours. Keep collection paused after
@@ -231,3 +242,60 @@ Return blocking findings with the affected requirement, baseline code location
 or proposed design step, failure scenario and a minimal corrective action.
 Record disputed requirement interpretations separately from implementation
 defects. Issue 1 completion must not be treated as whole-backend acceptance.
+
+## SQL injection review on 2026-11-11
+
+Reviewed main at `8adfaba`. API and HTML inputs reach Django ORM value
+parameters; search lookups and staff actions use fixed allowlists. No raw SQL
+or request-controlled table/column construction was found in application code.
+This review found no exploitable SQL or DDL injection path in those routes.
+SQL keywords in user text remain data; a keyword blacklist is not required.
+
+`tests/test_sql_injection.py` covers literal search, authentication, report and
+evidence writes, rejected query-structure fields and rejected staff actions.
+These checks do not establish runtime DDL privilege isolation. The current
+SQLite configuration has no distinct runtime and migration database roles;
+production privilege separation remains required deployment work above.
+
+Focused validation: 29 regression tests passed in 9.13 seconds on SQLite.
+Ruff, whitespace and ASCII checks passed. Only tests and this plan changed;
+the existing 465-test suite was not rerun for this review. No database role
+changes were applied and no production privilege-isolation result is claimed.
+
+References: [Django SQL injection protection](https://docs.djangoproject.com/en/6.1/topics/security/#sql-injection-protection),
+[SQLite permissions](https://www.sqlite.org/omitted.html) and
+[PostgreSQL ownership and privileges](https://www.postgresql.org/docs/current/ddl-priv.html).
+
+## Request-flood review on 2026-11-11
+
+The user's second concern is DoS/DDoS, not DDL injection. No application rate
+limits or concurrency budgets are configured for API or HTML routes. The
+repository contains no proxy request-limit configuration; external hosting
+controls have not been verified. No request flood or load test was performed.
+
+API lists are bounded to 100 items per page. Upload checks enforce image size,
+count and decoding constraints. These do not limit request frequency. Public
+HTML report lists are unpaginated; login and registration perform password
+hashing without throttling. Staff-only match regeneration compares all lost
+and found reports inside one write transaction, without duplicate-job control.
+
+Before public deployment:
+
+1. Bound burst and sustained requests for both HTML and API, with stricter
+   policies for login, registration, writes and uploads. Reject excess work
+   before expensive processing, return 429 with retry guidance, and use shared
+   atomic counters across workers. Respect campus NAT and trust client-IP
+   headers only from configured proxies. Set limits against measured capacity.
+2. Paginate HTML lists, bound search/input cost and prevent concurrent duplicate
+   match-generation jobs. Bound background queues and database/worker waits.
+3. Limit traffic, connections, complete request bodies and read timeouts at
+   the ingress. Django's multipart POST memory limit excludes file data;
+   image checks after upload do not bound transfer or temporary-disk usage.
+   Use upstream DDoS protection for attacks that exhaust origin bandwidth.
+4. Verify rejection and recovery with controlled tests in an isolated
+   environment, including multiple workers and ordinary users sharing an IP.
+
+Application throttling is basic abuse control, not a complete DDoS defense.
+References: [DRF throttling](https://www.django-rest-framework.org/api-guide/throttling/),
+[NGINX request limits](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html)
+and [Django upload limits](https://docs.djangoproject.com/en/6.1/ref/settings/#data-upload-max-memory-size).

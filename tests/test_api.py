@@ -24,7 +24,7 @@ def url(name, *args):
 def report_data(**overrides):
     return {
         "report_type": "found", "item_name": "Blue wallet", "category": "Accessories",
-        "description": "Near the main entrance", "location": "Library", "event_date": "2026-10-01",
+        "description": "Near the main entrance", "location": "Library", "event_date": "2026-10-01", "event_time": "10:00",
         "contact_name": "Owner", "contact_email": "owner@example.com", "contact_phone": "123456",
         **overrides,
     }
@@ -133,7 +133,7 @@ def test_api_dispute_resolution_and_safe_interruption(api_client, users, resolut
     api_client.force_login(users["service"])
     action_url = url("claim-action", claim.pk)
     for action, status in [("approve", "awaiting_handover"), ("start_dispute", "under_dispute")]:
-        response = api_client.post(action_url, {"action": action, "confirmations": CONFIRMATIONS[action]})
+        response = api_client.post(action_url, {"action": action, "reason": "Ownership disputed", "confirmations": CONFIRMATIONS[action]})
         assert response.status_code == 200
         assert response.json()["status"] == status
     if resolution == "resolve_reject":
@@ -162,7 +162,7 @@ def test_api_dispute_resolution_and_safe_interruption(api_client, users, resolut
     else:
         assert resolved.json()["status"] == "rejected"
     api_client.force_login(users["claimant"])
-    withdrawn = api_client.post(url("withdraw", claim.pk), {})
+    withdrawn = api_client.post(url("withdraw", claim.pk), {"reason": "No longer needed"})
     assert withdrawn.status_code == (200 if resolution == "resolve_keep" else 409)
     claim.refresh_from_db()
     assert claim.status == ("withdrawn" if resolution == "resolve_keep" else "rejected")
@@ -243,11 +243,11 @@ def test_staff_report_review_closure_and_matching_api(api_client, users):
     assert api_client.post(url("regenerate"), {}).status_code == 200
     assert api_client.get(url("matches")).json()["count"] == 1
     api_client.force_login(users["owner"])
-    response = api_client.post(url("close", report.pk), {})
+    response = api_client.post(url("close", report.pk), {"reason": "Item recovered"})
     assert response.status_code == 200
     assert response.json()["status"] == "close_requested"
     api_client.force_login(users["service"])
-    assert api_client.post(url("review-report", report.pk), {"action": "close"}).json()["status"] == "closed"
+    assert api_client.post(url("review-report", report.pk), {"action": "close", "reason": "Closure verified"}).json()["status"] == "closed"
 
 
 def test_session_login_registration_and_mutations_require_csrf(users):
