@@ -1,0 +1,114 @@
+name: Backend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: sqlite
+            database_name: /tmp/campus-ci.sqlite3
+          - database: postgresql
+            database_name: campus_ci
+    services:
+      postgres:
+        image: postgres:17.12-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-postgres
+          POSTGRES_DB: campus_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d campus_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.12-alpine3.22
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis_faults:
+        image: redis:7.4.12-alpine3.22
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      DB_ENGINE: ${{ matrix.database }}
+      DB_NAME: ${{ matrix.database_name }}
+      DB_USER: postgres
+      DB_PASSWORD: ci-only-postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_SSLMODE: disable
+      REQUEST_LIMITS_REDIS_URL: redis://127.0.0.1:6379/0
+      REDIS_TEST_URL: redis://127.0.0.1:6379/1
+      TEST_REQUEST_LIMITS_BACKEND: redis
+      REDIS_FAULT_TEST_URL: redis://127.0.0.1:6380/0
+      REDIS_ALLOW_FAULT_TESTS: "yes"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.13.9"
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: |
+          uv lock --check
+          uv sync --frozen --extra dev
+      - name: Static and migration checks
+        run: |
+          .venv/bin/ruff check .
+          .venv/bin/python manage.py check
+          .venv/bin/python manage.py makemigrations --check --dry-run
+          .venv/bin/python manage.py migrate --noinput
+          .venv/bin/python manage.py migrate --check
+      - name: Test workflows, migrations and real Redis
+        env:
+          REDIS_FAULT_STOP_COMMAND: '["docker", "stop", "--time", "5", "${{ job.services.redis_faults.id }}"]'
+          REDIS_FAULT_START_COMMAND: '["docker", "start", "${{ job.services.redis_faults.id }}"]'
+        run: .venv/bin/python -m pytest -q --tb=short --strict-markers
+      - name: Verify runtime database privileges
+        if: matrix.database == 'postgresql'
+        env:
+          PG_ROLE_TEST_ADMIN_DSN: postgresql://postgres:ci-only-postgres@127.0.0.1:5432/postgres
+          PG_ROLE_TEST_DATABASE: test_campus_roles
+        run: .venv/bin/python scripts/check_database_roles.py
+      - name: Validate production settings
+        env:
+          APP_ENV: production
+          DEBUG: "False"
+          SECRET_KEY: ci-only-configuration-check-9FHq4yRA0pdB7Tn2caEw6kUx8vMz3WjG
+          ALLOWED_HOSTS: campus.example.edu
+          DB_ENGINE: postgresql
+          DB_NAME: campus_ci
+          DB_SSLMODE: verify-full
+          SECURE_HSTS_SECONDS: "31536000"
+          SECURE_HSTS_INCLUDE_SUBDOMAINS: "True"
+          SECURE_HSTS_PRELOAD: "True"
+        run: .venv/bin/python manage.py check --deploy --fail-level WARNING

@@ -4,15 +4,20 @@ Django settings for Campus Lost and Found project.
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+
+from .environment import environment_settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / ".env")
-
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-key-change-in-production")
-DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+profile = os.getenv("APP_ENV", "development").strip().lower()
+if profile == "development":
+    load_dotenv(BASE_DIR / ".env")
+    if os.getenv("APP_ENV", profile).strip().lower() != profile:
+        raise ImproperlyConfigured("Set APP_ENV in the process environment, not in .env.")
+runtime = environment_settings(os.environ, BASE_DIR)
+globals().update(runtime)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -59,14 +64,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-        "OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20},
-    }
-}
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -81,10 +78,11 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATICFILES_DIRS = []
+STATIC_ROOT = Path(os.getenv("STATIC_ROOT", str(BASE_DIR / "staticfiles")))
 
 MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
-PRIVATE_MEDIA_ROOT = BASE_DIR / "private_media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media")))
+PRIVATE_MEDIA_ROOT = Path(os.getenv("PRIVATE_MEDIA_ROOT", str(BASE_DIR / "private_media")))
 STORAGES = {
     "default": {"BACKEND": "apps.reports.managed_storage.ManagedFileSystemStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
@@ -117,25 +115,20 @@ REQUEST_LIMITS_CACHE_ALIAS = "request_limits"
 REQUEST_LIMITS_IP_ENDPOINT_MULTIPLIER = int(
     os.getenv("REQUEST_LIMITS_IP_ENDPOINT_MULTIPLIER", "20")
 )
-REQUEST_LIMITS_TRUSTED_PROXIES = [
-    value.strip() for value in os.getenv("REQUEST_LIMITS_TRUSTED_PROXIES", "").split(",")
-    if value.strip()
-]
-REQUEST_LIMITS_REDIS_URL = os.getenv("REQUEST_LIMITS_REDIS_URL", "")
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
     "request_limits": {
         "BACKEND": (
-            "django.core.cache.backends.redis.RedisCache" if REQUEST_LIMITS_REDIS_URL
+            "django.core.cache.backends.redis.RedisCache" if runtime["REQUEST_LIMITS_REDIS_URL"]
             else "django.core.cache.backends.locmem.LocMemCache"
         ),
-        "LOCATION": REQUEST_LIMITS_REDIS_URL or "development-request-limits",
+        "LOCATION": runtime["REQUEST_LIMITS_REDIS_URL"] or "development-request-limits",
         # Avoid evicting active development counters under ordinary local use.
         "OPTIONS": (
             {"socket_connect_timeout": 1, "socket_timeout": 1}
-            if REQUEST_LIMITS_REDIS_URL else {"MAX_ENTRIES": 100000}
+            if runtime["REQUEST_LIMITS_REDIS_URL"] else {"MAX_ENTRIES": 100000}
         ),
-        "KEY_PREFIX": "campus-lost-found",
+        "KEY_PREFIX": runtime["REQUEST_LIMITS_KEY_PREFIX"],
     },
 }
 

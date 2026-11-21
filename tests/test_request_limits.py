@@ -6,7 +6,6 @@ from threading import Lock
 from unittest.mock import Mock, patch
 
 import pytest
-from django.core.cache import caches
 from django.core.cache.backends.locmem import LocMemCache
 from django.core.exceptions import RequestDataTooBig
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -55,9 +54,6 @@ def isolated_guard(settings):
     settings.REQUEST_LIMITS = {
         scope: [(1000, 60)] for scope in settings.REQUEST_LIMITS
     }
-    caches[settings.REQUEST_LIMITS_CACHE_ALIAS].clear()
-    yield
-    caches[settings.REQUEST_LIMITS_CACHE_ALIAS].clear()
 
 
 def set_budget(settings, scope, limit, seconds=60):
@@ -214,6 +210,13 @@ def test_cache_outage_returns_503_before_view(client, endpoint):
 
 
 def test_production_refuses_local_cache_and_reports_system_check(client, settings):
+    settings.CACHES = {
+        **settings.CACHES,
+        "request_limits": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unsupported-production-cache",
+        },
+    }
     settings.DEBUG = False
     with pytest.raises(RequestLimitUnavailable):
         guard_cache()
