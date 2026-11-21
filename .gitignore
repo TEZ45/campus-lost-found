@@ -8,9 +8,6 @@ __pycache__/
 venv/
 env/
 
-# uv
-uv.lock
-
 # Local secrets
 .env
 .env.*
@@ -22,6 +19,7 @@ db.sqlite3-*
 local_settings.py
 /media/
 /private_media/
+/staticfiles/
 *.log
 
 # Test output

@@ -15,31 +15,35 @@ for the requirement-by-requirement trace.
 
 ### Prerequisites
 
-- Python 3.12+
-- uv (recommended) or pip
+- Python 3.13 (tested; minimum 3.12)
+- uv 0.13.9
 
 ### Setup
 
 ```bash
 # Install dependencies
-uv sync
+uv sync --frozen --extra dev
 
 # Run migrations
-uv run python manage.py migrate
+uv run --frozen --extra dev python manage.py migrate
 
 # Create superuser (for admin)
-uv run python manage.py createsuperuser
+uv run --frozen --extra dev python manage.py createsuperuser
 
 # Start dev server
-uv run python manage.py runserver
+uv run --frozen --extra dev python manage.py runserver
 ```
 
 Then open http://127.0.0.1:8000/
 
+Local development defaults to SQLite. PostgreSQL 17 is the deployment target;
+see [runtime setup](docs/runtime.md) for environment profiles, separate database
+roles and isolated integration tests. Production and test profiles ignore `.env`.
+
 Run the notification worker in a second terminal:
 
 ```bash
-uv run python manage.py deliver_notifications
+uv run --frozen --extra dev python manage.py deliver_notifications
 ```
 
 The worker polls every second. Business changes persist a notification event
@@ -65,8 +69,8 @@ instead of deleting them and their related claims.
 Stop the application before updating an existing installation, then run:
 
 ```bash
-uv run python manage.py migrate
-uv run python manage.py move_private_evidence
+uv run --frozen --extra dev python manage.py migrate
+uv run --frozen --extra dev python manage.py move_private_evidence
 ```
 
 Restart after both commands succeed. The migration refuses duplicate active
@@ -81,19 +85,25 @@ the authenticated endpoint during the file move.
 
 ### Tests
 
+Set APP_ENV=test in the process environment and select an isolated database
+before running the suite. See [runtime setup](docs/runtime.md) for PostgreSQL.
+
 ```bash
-uv run --extra dev python -m pytest
+uv run --frozen --extra dev python -m pytest
 ```
 
 The suite includes checks corresponding to URS A1-A6 (exclusive reservation,
 evidence access control, handover/withdrawal races, safe interruption,
 completion invalidation) plus search, roles, notices and attachment limits.
-Tests use temporary media directories and a temporary SQLite file. Concurrent
-workflow tests use separate database connections. SQLite write transactions
-use `IMMEDIATE` mode; PostgreSQL deployment still needs separate validation.
-Passing tests do not establish complete URS acceptance. Disputed evidence
-submission and retention are implemented in the P1 review branch. Deployment
-validation remains follow-up work. See [the schema](docs/schema.md) and
+Tests use temporary media and an isolated database. Concurrent workflows use
+separate connections; SQLite uses `IMMEDIATE` transactions and PostgreSQL uses
+row locks. Real Redis tests require REDIS_TEST_URL and otherwise skip explicitly.
+Set TEST_REQUEST_LIMITS_BACKEND=redis to exercise ordinary workflow requests
+against Redis as well. See [Redis validation](docs/redis-validation.md) for
+the separate fault-test service and the database selection review.
+See [the P2 validation record](docs/p2-runtime-review.md) for executed checks and
+remaining deployment work. Passing automated tests does not establish complete
+URS acceptance. See [the schema](docs/schema.md) and
 [the P1 review](docs/p1-abuse-review.md) for migrations, limits and maintenance.
 
 ### API and business rules
@@ -148,7 +158,7 @@ campus-lost-found/
 
 - Backend: Django and Django REST Framework
 - Frontend: HTML templates with vanilla CSS/JS
-- Database: SQLite; PostgreSQL deployment is not configured yet
+- Database: PostgreSQL 17 target; SQLite for local development
 - Package manager: uv
 
 ## Team Collaboration
