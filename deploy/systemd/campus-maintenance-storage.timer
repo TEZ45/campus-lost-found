@@ -1,0 +1,11 @@
+[Unit]
+Description=Campus storage schedule
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=1h
+AccuracySec=1s
+Unit=campus-maintenance@storage.service
+
+[Install]
+WantedBy=timers.target

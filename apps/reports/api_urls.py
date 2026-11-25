@@ -18,6 +18,7 @@ urlpatterns = [
     path("reports/<int:pk>/claims/", api.ReportClaims.as_view(), name="create-claim"),
     path("claims/", api.OwnClaims.as_view(), name="claims"),
     path("claims/<int:pk>/", api.ClaimDetail.as_view(), name="claim"),
+    path("claims/<int:pk>/history/", api.ClaimHistory.as_view(), name="claim-history"),
     path("claims/<int:pk>/resubmit/", api.ClaimResubmission.as_view(), name="resubmit"),
     path("claims/<int:pk>/withdraw/", api.ClaimWithdrawal.as_view(), name="withdraw"),
     path("attachments/<int:pk>/", api.Attachment.as_view(), name="attachment"),

@@ -1,0 +1,11 @@
+[Unit]
+Description=Campus deletions schedule
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+AccuracySec=1s
+Unit=campus-maintenance@deletions.service
+
+[Install]
+WantedBy=timers.target

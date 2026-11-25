@@ -17,6 +17,8 @@ PRODUCTION = {
     "DB_PASSWORD": "test-only-database-password",
     "DB_HOST": "127.0.0.1",
     "REQUEST_LIMITS_REDIS_URL": "redis://127.0.0.1:6379/15",
+    "RECOVERY_STATE_FILE": str(ROOT.parent / "test-control" / "recovery.json"),
+    "OPS_STATE_DIR": str(ROOT.parent / "test-operations"),
 }
 READ_SETTINGS = """
 import json
@@ -48,6 +50,7 @@ def run_settings(values, code=READ_SETTINGS):
     names = {
         "APP_ENV", "DEBUG", "SECRET_KEY", "ALLOWED_HOSTS", "TRUST_PROXY_HTTPS",
         "CSRF_TRUSTED_ORIGINS", "DJANGO_SETTINGS_MODULE",
+        "RECOVERY_STATE_FILE", "OPS_STATE_DIR", "BACKUP_ROOT", "MEDIA_ROOT", "PRIVATE_MEDIA_ROOT",
     }
     env = {key: value for key, value in os.environ.items()
            if key not in names and not key.startswith(("DB_", "REQUEST_LIMITS_", "SECURE_HSTS_"))}
@@ -89,6 +92,7 @@ def test_postgresql_uses_explicit_identity_and_bounded_database_calls():
         "options": "-c statement_timeout=7000 -c lock_timeout=2000",
     }
     assert "transaction_mode" not in database["OPTIONS"]
+    assert database["CONN_MAX_AGE"] == 0
 
 
 def test_production_enables_https_without_implicitly_trusting_proxy_headers():
@@ -100,7 +104,20 @@ def test_production_enables_https_without_implicitly_trusting_proxy_headers():
     assert result["hsts_subdomains"] is False and result["hsts_preload"] is False
     assert result["proxy"] is None
     assert result["database"]["OPTIONS"]["sslmode"] == "verify-full"
+    assert result["database"]["CONN_MAX_AGE"] == 60
     assert result["redis"] == "django.core.cache.backends.redis.RedisCache"
+
+
+@pytest.mark.parametrize("value", ["-1", "301", "unlimited"])
+def test_database_connection_reuse_is_bounded(value):
+    result = run_settings({**PRODUCTION, "DB_CONN_MAX_AGE": value})
+    assert result.returncode != 0
+    assert "DB_CONN_MAX_AGE" in result.stderr
+
+
+def test_database_connection_reuse_can_be_disabled():
+    result = read_settings({**PRODUCTION, "DB_CONN_MAX_AGE": "0"})
+    assert result["database"]["CONN_MAX_AGE"] == 0
 
 
 def test_explicit_proxy_and_cache_namespace_settings():
@@ -148,7 +165,7 @@ with patch('dotenv.load_dotenv', side_effect=load_dotenv):
 
 @pytest.mark.parametrize("name", [
     "SECRET_KEY", "ALLOWED_HOSTS", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST",
-    "REQUEST_LIMITS_REDIS_URL",
+    "REQUEST_LIMITS_REDIS_URL", "RECOVERY_STATE_FILE", "OPS_STATE_DIR",
 ])
 def test_missing_production_inputs_fail_without_loading_dotenv(name):
     env = {key: value for key, value in PRODUCTION.items() if key != name}
@@ -176,6 +193,9 @@ def test_missing_production_inputs_fail_without_loading_dotenv(name):
     ("TRUST_PROXY_HTTPS", "true"), ("CSRF_TRUSTED_ORIGINS", "http://frontend.example.edu"),
     ("CSRF_TRUSTED_ORIGINS", "https://*.example.edu"),
     ("SECURE_HSTS_PRELOAD", "true"), ("SECURE_HSTS_SECONDS", "-1"),
+    ("RECOVERY_STATE_FILE", "relative.json"), ("OPS_STATE_DIR", "relative"),
+    ("RECOVERY_STATE_FILE", str(ROOT / "private_media" / "state.json")),
+    ("OPS_STATE_DIR", str(ROOT / "media" / "operations")),
 ])
 def test_invalid_configuration_fails_before_database_access(name, value):
     result = run_settings({**PRODUCTION, name: value})
@@ -198,3 +218,9 @@ with patch('django.db.backends.base.base.BaseDatabaseWrapper.connect',
     call_command('check', deploy=True, fail_level='WARNING')
 """)
     assert result.returncode == 0, result.stderr
+
+
+def test_recovery_and_operations_state_cannot_share_a_directory():
+    result = run_settings({**PRODUCTION, "OPS_STATE_DIR": str(ROOT.parent / "test-control")})
+    assert result.returncode != 0
+    assert "separate directories" in result.stderr

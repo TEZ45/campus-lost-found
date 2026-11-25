@@ -1,0 +1,13 @@
+[Unit]
+Description=Quiesced Campus backup and expiry
+After=network-online.target
+OnFailure=campus-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/campus/app
+EnvironmentFile=/etc/campus/backup.env
+UMask=0077
+ExecStart=/srv/campus/app/.venv/bin/python scripts/scheduled_backup.py --state /var/lib/campus-backup-control/writers.json --root /srv/campus-backups --pg-bin /usr/lib/postgresql/17/bin --public-media /srv/campus/media --private-media /srv/campus/private_media
+ExecStopPost=/srv/campus/app/.venv/bin/python scripts/scheduled_backup.py --state /var/lib/campus-backup-control/writers.json --resume-only
+TimeoutStartSec=15min

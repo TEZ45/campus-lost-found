@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import DatabaseError, close_old_connections
 
 from apps.reports.notifications import deliver_pending
+from apps.reports.operations import run_tracked
 
 
 class Command(BaseCommand):
@@ -24,7 +25,7 @@ class Command(BaseCommand):
         try:
             while True:
                 try:
-                    result = deliver_pending(options["limit"])
+                    result = run_tracked("notifications", lambda: deliver_pending(options["limit"]))
                 except DatabaseError as exc:
                     if options["once"]:
                         raise CommandError("The notification database is unavailable.") from exc

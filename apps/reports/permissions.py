@@ -79,17 +79,18 @@ def can_resubmit(user, claim):
     )
 
 
-def report_actions(user, report):
+def report_actions(user, report, *, reservations=None):
     actions = []
-    in_progress = report.claims.filter(status="handover_in_progress").exists()
-    if is_service_staff(user):
-        actions.extend(action for action in report.staff_actions
-                       if action["key"] != "close" or not in_progress)
     if can_manage_report(user, report):
-        reserved = report.claims.filter(status__in=[
-            "awaiting_handover", "under_dispute", "handover_in_progress",
-        ]).exists()
-        if report.status not in ("closed", "close_requested") and not reserved:
+        if reservations is None:
+            reservations = list(report.claims.filter(status__in=[
+                "awaiting_handover", "under_dispute", "handover_in_progress",
+            ]).values_list("pk", "status"))
+        in_progress = any(state == "handover_in_progress" for _, state in reservations)
+        if is_service_staff(user):
+            actions.extend(action for action in report.staff_actions
+                           if action["key"] != "close" or not in_progress)
+        if report.status not in ("closed", "close_requested") and not reservations:
             actions.append({"key": "edit", "label": "Edit", "reason": False})
         if report.status not in ("closed", "close_requested") and not in_progress:
             actions.append({"key": "request_close", "label": "Request closure", "reason": True})
@@ -98,7 +99,7 @@ def report_actions(user, report):
     return actions
 
 
-def claim_actions(user, claim):
+def claim_actions(user, claim, *, reservations=None):
     actions = []
     if is_service_staff(user):
         for action in claim.staff_actions:
@@ -106,8 +107,11 @@ def claim_actions(user, claim):
                 claim.report.status != "approved" or claim.report.report_type != "found"
             ):
                 continue
-            if action["key"] == "approve" and claim.reservation_conflict_exists():
-                continue
+            if action["key"] == "approve":
+                conflict = (claim.reservation_conflict_exists() if reservations is None
+                            else any(pk != claim.pk for pk, _ in reservations))
+                if conflict:
+                    continue
             actions.append(action)
     if can_resubmit(user, claim):
         actions.append({"key": "resubmit", "label": "Resubmit evidence", "reason": False})

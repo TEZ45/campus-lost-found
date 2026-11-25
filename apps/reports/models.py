@@ -6,6 +6,7 @@ from django.utils import timezone
 from .confirmations import confirmation_fields, validate_confirmations
 from .lifecycle_models import FileDeletion, StorageLedger  # noqa: F401
 from .permissions import is_service_staff
+from .recovery import assert_collection_open
 from .storage import PrivateEvidenceStorage
 
 
@@ -170,6 +171,7 @@ class Report(models.Model):
     def review(self, staff, action, reason=""):
         if not is_service_staff(staff):
             raise PermissionDenied
+        assert_collection_open()
         reason = validate_reason(reason)
         with transaction.atomic():
             report = Report.objects.select_for_update().get(pk=self.pk)
@@ -341,6 +343,7 @@ class Claim(models.Model):
                     raise PermissionDenied
             elif not is_service_staff(actor):
                 raise PermissionDenied
+            assert_collection_open()
             if locked.status not in allowed_from:
                 raise ValueError(f"{action} not allowed from {locked.status}")
             if action in self.REASON_REQUIRED_ACTIONS:

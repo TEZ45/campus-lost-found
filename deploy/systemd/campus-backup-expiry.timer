@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Campus backup expiry independently
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1h
+AccuracySec=1s
+Unit=campus-backup-expiry.service
+
+[Install]
+WantedBy=timers.target

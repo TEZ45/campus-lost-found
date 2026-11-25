@@ -8,6 +8,7 @@ Read-only verification on that date confirmed main still pointed to this base.
 The subsequent [real Redis review](redis-validation.md) records the Redis
 environment, full-suite cache mode and database comparison. The initial test
 checkpoint below predates that follow-up.
+The local 2026-11-24 follow-up is recorded at the end of this document.
 
 ## Requirements review
 
@@ -84,7 +85,10 @@ this initial checkpoint; see the follow-up review for current local results.
 The publication pull request records remote CI results. Deployment acceptance
 remains unverified.
 
-## Remaining P2 work
+## Remaining work at the initial checkpoint
+
+This historical list predates the local follow-up below. See the final section
+for the remaining deployment acceptance gates.
 
 1. Validate Redis on the actual deployment, including TLS/ACL, persistence and
    replica failover. Local tests cover shared counters, noeviction memory failure,
@@ -105,3 +109,125 @@ remains unverified.
 
 The local database switch is a configuration capability, not a completed
 production migration or a claim that deployment and acceptance gates have passed.
+
+## Local follow-up on 2026-11-24
+
+Branch: fix/p2a-claim-history-pagination. At this checkpoint the changes were
+uncommitted locally; no merge, push, remote CI run or production deployment had
+been performed. The delivery scope below records the subsequent publication plan.
+
+Claim history now has an authorized paginated endpoint, with a default of 20
+and a maximum of 100 entries. Claim responses expose history_url instead of
+embedding all history. Detail and history reads authorize before related data
+loading. Action hints batch reservation reads for the current page; business
+transactions still enforce current ownership, state and reservation constraints.
+
+The operational package adds independent recovery control, tracked maintenance,
+health checks, protected PostgreSQL full/incremental backups, safe new-target
+restoration, retryable expiry and deployment/worker/timer examples. Recovery
+requires explicit quiescence and custody reconciliation. Live retention remains
+15/30/45 days and protected backup retention remains 14 days.
+
+WSGI connections use bounded reuse with health checks. Shared-IP read/write
+budgets support the campus metadata workload. JSON writes no longer consume
+file-upload counters. Account, login, registration and multipart upload limits
+remain unchanged. Routine backup checks use compact metadata; restore and explicit
+verification retain full payload checksums. Failed expiry uses retryable deletion
+directories and cannot block creation of a new backup solely by losing metadata.
+
+Final local regression used real Redis, including all seven integration/fault
+cases in each database run:
+
+| Database | Passed | Skipped | Failures |
+| --- | --- | --- | --- |
+| SQLite | 947 | 2 PostgreSQL-only cases | 0 |
+| PostgreSQL | 949 | 0 | 0 |
+
+Ruff, dependency-lock consistency, ASCII/space checks, migration checks, fresh
+SQLite migrations, production configuration and disposable database-role checks
+passed. The runtime role completed workflows and retention cleanup while DDL
+and role escalation remained denied. No model migration is required.
+
+A fresh PostgreSQL 17 drill verified native full/incremental backups, media
+hashes, audit records, latest-state restoration, stale-state collection blocking,
+explicit custody resume, interrupted expiry retries and legacy backup compatibility.
+The final tiny-fixture full backup took 6.75 seconds, incremental backup 5.54
+seconds, and restoration/startup/data verification 20.02 seconds. These are
+tooling measurements, not production RPO/RTO certification.
+
+Local nginx/TLS validation passed seven ingress checks and 23 actual media
+authorization requests. Existing private evidence could not bypass the protected
+API/HTML routes. This did not verify production database TLS or real certificates.
+
+All three final tiers used the same final source and configuration, five minutes
+of warm-up and fifteen minutes of measurement:
+
+| Users | Reports / claims | Achieved RPS | Read p95 | Write p95 | Notice p95 | Errors |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 | 5000 / 10000 | 10.000 | 0.087 s | 0.115 s | 0.980 s | 0 |
+| 100 | 10000 / 20000 | 20.000 | 0.090 s | 0.105 s | 0.991 s | 0 |
+| 200 | 20000 / 40000 | 39.997 | 0.126 s | 0.145 s | 0.993 s | 0 |
+
+The 50/100-user tiers ran concurrently on the same local host; the final
+PostgreSQL regression overlapped early warm-up only, not measurement. The
+200-user tier used the ordinary entry point in isolation. Each tier reached
+its user target with no warm-up errors, no pending notices and no mismatches
+between acknowledged writes and stored business/audit records. The respective
+write counts were 2400, 4800 and 9600, including warm-up. Every owned web and
+notification process stayed alive until cleanup and was stopped afterward.
+
+Final evidence files are nov24-p2-verified-small.json,
+nov24-p2-verified-medium.json and nov24-p2-isolated-large.json.
+
+Earlier evidence is retained: a simultaneous three-tier run failed at the large
+tier with server queue saturation and upload-budget rejections. A diagnostic
+run with thread-dump instrumentation exited unexpectedly; its cause was not
+established and it is not acceptance evidence. The ordinary final large-tier
+run stayed alive throughout. No timeouts or thread limits were raised to pass.
+
+Local logs and JSON/JUnit records remain under E:/SE/p2-runtime. No credentials,
+database files, backups, VM images or private test artifacts are in the repository.
+The final validation JSON records file hashes and evidence paths. PostgreSQL,
+the Redis test VM, its tunnel and all owned HTTP workers were stopped after
+verification; their test listeners were confirmed closed.
+
+## Deployment acceptance still required
+
+- Validate 100/200/400 GiB file capacity on provisioned storage. Local capacity
+  fixtures use full database row counts but three small shared images; the local
+  disk has only about 40 GiB free.
+- Measure whole backup stop-to-restart time at real data size. The conservative
+  method stops writers and verifies parent payloads. The two-hour monthly
+  maintenance target permits only about eight seconds per 50-minute snapshot;
+  an online or storage-snapshot design may be needed before enabling the timer.
+- Validate real-host systemd execution, alert delivery, TLS/ACL, Redis persistence
+  and failover, backup storage protection, RPO/RTO and custody reconciliation.
+- The frontend still needs history_url integration and legacy HTML history
+  pagination. Team-owned frontend, presentation and acceptance documents were
+  not changed in this follow-up.
+
+## Delivery scope on 2026-11-25
+
+The owner prioritized a complete team demonstration on a local machine and source
+submission within two weeks. Further long load tests, full file-capacity tests
+and production deployment acceptance are deferred; they are not marked passed.
+Keep authorization, evidence privacy, explicit handover confirmations and the
+15/30/45-day retention rules unchanged.
+
+The validated backend changes are intended for the shared feature branch
+fix/p2a-claim-history-pagination, without merging main. Local databases, media,
+credentials and test environments remain outside the published source. The
+workflow triggers on pull requests, main pushes or manual dispatch; a feature
+branch push alone does not establish a remote CI result.
+
+The [local demo procedure](runtime.md#local-team-demonstration) covers startup,
+roles, the notification worker and a cross-role rehearsal. It is an acceptance
+checklist, not a claim that the team's actual frontend has already passed an
+end-to-end browser rehearsal. Frontend owners retain their implementation work.
+
+The pre-publication core regression passed 350 tests in 101.39 seconds using
+SQLite and process-local request counters. It covered HTTP sessions, reports,
+claims, handover, confirmations, notices, history pagination and access control.
+Source hashes matched the 2026-11-24 full validation; only backend documentation
+changed afterward. No additional load test or real Redis run was needed for
+these documentation changes.

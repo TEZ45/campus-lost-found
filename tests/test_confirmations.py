@@ -233,7 +233,9 @@ def test_api_valid_confirmation_is_audited(api_client, users, action):
     }, format="json")
     assert response.status_code == 200
     assert response.json()["status"] == CASES[action][1]
-    entries = [row for row in response.json()["history"] if row["action"] == CASES[action][2]]
+    history_response = api_client.get(response.json()["history_url"])
+    assert history_response.status_code == 200
+    entries = [row for row in history_response.json()["results"] if row["action"] == CASES[action][2]]
     assert len(entries) == 1
     assert entries[0]["confirmations"] == CASES[action][3]
     assert entries[0]["actor"] == users["service"].pk

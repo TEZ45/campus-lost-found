@@ -1,0 +1,11 @@
+[Unit]
+Description=Campus backup at least hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=50min
+AccuracySec=1s
+Unit=campus-backup.service
+
+[Install]
+WantedBy=timers.target
