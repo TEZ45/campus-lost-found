@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Campus health every minute
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+AccuracySec=1s
+Unit=campus-health.service
+
+[Install]
+WantedBy=timers.target

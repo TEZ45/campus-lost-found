@@ -1,0 +1,21 @@
+[Unit]
+Description=Campus %i maintenance
+After=network-online.target
+OnFailure=campus-alert@%n.service
+
+[Service]
+User=campus
+Group=campus
+WorkingDirectory=/srv/campus/app
+EnvironmentFile=/etc/campus/runtime.env
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/campus-control
+ReadWritePaths=/srv/campus/media /srv/campus/private_media /var/lib/campus-operations
+TimeoutStopSec=30
+Type=oneshot
+ExecStart=/srv/campus/app/.venv/bin/python manage.py run_maintenance --task %i --batch-size 1000 --max-files 1000000
+TimeoutStartSec=300

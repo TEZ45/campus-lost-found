@@ -134,11 +134,11 @@ CACHES = {
 
 # Atomic fixed windows: each tuple is (requests, seconds). Adjacent windows can
 # allow twice one window's limit; independent burst and sustained caps both apply.
-# Endpoint caps below are per account; IP endpoint caps multiply these values to
-# accommodate shared campus NATs. Measure actual traffic before production tuning.
+# Endpoint caps below are per account. IP overrides cover shared campus reads
+# and writes; other IP endpoint caps use the configured multiplier.
 REQUEST_LIMITS = {
     "ip_burst": [(3000, 60)],
-    "ip_sustained": [(30000, 3600)],
+    "ip_sustained": [(180000, 3600)],
     "account_burst": [(300, 60)],
     "account_sustained": [(3000, 3600)],
     "login": [(30, 60), (100, 3600)],
@@ -146,6 +146,10 @@ REQUEST_LIMITS = {
     "write": [(60, 60), (600, 3600)],
     "upload": [(20, 60), (200, 3600)],
     "search": [(120, 60), (1200, 3600)],
+}
+REQUEST_LIMITS_IP = {
+    "write": [(1200, 60), (30000, 3600)],
+    "search": [(2400, 60), (36000, 3600)],
 }
 
 from apps.reports.request_limits import register_request_limit_checks

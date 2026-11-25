@@ -1,5 +1,6 @@
 import ipaddress
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
@@ -73,6 +74,7 @@ def environment_settings(env, base_dir):
             "HOST": text("DB_HOST", "127.0.0.1"),
             "PORT": integer("DB_PORT", 5432, maximum=65535),
             "CONN_HEALTH_CHECKS": True,
+            "CONN_MAX_AGE": integer("DB_CONN_MAX_AGE", 60 if production else 0, minimum=0, maximum=300),
             "OPTIONS": {
                 "connect_timeout": integer("DB_CONNECT_TIMEOUT", 5, maximum=60),
                 "sslmode": sslmode,
@@ -116,6 +118,27 @@ def environment_settings(env, base_dir):
     preload = boolean("SECURE_HSTS_PRELOAD", False)
     if preload and (not subdomains or hsts < 31536000):
         raise ImproperlyConfigured("SECURE_HSTS_PRELOAD requires subdomains and at least 31536000 seconds.")
+    control_paths = {name: text(name) for name in ("RECOVERY_STATE_FILE", "OPS_STATE_DIR")}
+    media_paths = [base_dir.resolve()] + [Path(text(name, str(base_dir / default))).resolve() for name, default in (
+        ("MEDIA_ROOT", "media"), ("PRIVATE_MEDIA_ROOT", "private_media"),
+    )]
+    if text("BACKUP_ROOT"):
+        media_paths.append(Path(text("BACKUP_ROOT")).resolve())
+    for name, value in control_paths.items():
+        if production and not value:
+            raise ImproperlyConfigured(f"{name} is required in production.")
+        if value:
+            path = Path(value)
+            if not path.is_absolute():
+                raise ImproperlyConfigured(f"{name} must be an absolute external path.")
+            if any(path.resolve().is_relative_to(root) or root.is_relative_to(path.resolve())
+                   for root in media_paths):
+                raise ImproperlyConfigured(f"{name} must be separate from application, media and backup paths.")
+    if all(control_paths.values()):
+        recovery = Path(control_paths["RECOVERY_STATE_FILE"]).resolve().parent
+        operations = Path(control_paths["OPS_STATE_DIR"]).resolve()
+        if recovery.is_relative_to(operations) or operations.is_relative_to(recovery):
+            raise ImproperlyConfigured("RECOVERY_STATE_FILE and OPS_STATE_DIR must have separate directories.")
     return {
         "APP_ENV": profile, "DEBUG": debug, "SECRET_KEY": secret, "ALLOWED_HOSTS": hosts,
         "DATABASES": {"default": database}, "CSRF_TRUSTED_ORIGINS": origins,
@@ -125,6 +148,7 @@ def environment_settings(env, base_dir):
         "SECURE_SSL_REDIRECT": production, "SESSION_COOKIE_SECURE": production,
         "CSRF_COOKIE_SECURE": production, "SECURE_HSTS_SECONDS": hsts,
         "SECURE_HSTS_INCLUDE_SUBDOMAINS": subdomains, "SECURE_HSTS_PRELOAD": preload,
+        **control_paths,
     }
 
 

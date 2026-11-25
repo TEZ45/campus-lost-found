@@ -33,6 +33,7 @@ from .serializers import (
     ReportInput,
     ReportOutput,
     StrictSerializer,
+    output_context,
 )
 from .storage_quota import storage_status
 
@@ -100,12 +101,12 @@ class BaseApi(APIView):
         return instance.validated_data
 
     def output(self, serializer, value, request, status=200):
-        return Response(serializer(value, context={"request": request}).data, status=status)
+        return Response(serializer(value, context=output_context(request, [value])).data, status=status)
 
     def page(self, serializer, queryset, request):
         pager = Pagination()
         page = pager.paginate_queryset(queryset, request, view=self)
-        return pager.get_paginated_response(serializer(page, many=True, context={"request": request}).data)
+        return pager.get_paginated_response(serializer(page, many=True, context=output_context(request, page)).data)
 
 
 def user_data(user):
@@ -231,16 +232,29 @@ class OwnClaims(BaseApi):
 
 
 def claim_queryset():
-    return Claim.objects.select_related("report").prefetch_related("attachments", "history")
+    return Claim.objects.select_related("report").prefetch_related("attachments")
+
+
+def authorized_claim(user, pk):
+    claim = get_object_or_404(Claim.objects.only("claimant_id"), pk=pk)
+    if not can_read_evidence(user, claim):
+        raise PermissionDenied
+    return claim
 
 
 class ClaimDetail(BaseApi):
     def get(self, request, pk):
         self.require_user(request)
-        claim = get_object_or_404(claim_queryset(), pk=pk)
-        if not can_read_evidence(request.user, claim):
-            raise PermissionDenied
+        claim = authorized_claim(request.user, pk)
+        claim = get_object_or_404(claim_queryset(), pk=claim.pk)
         return self.output(ClaimOutput, claim, request)
+
+
+class ClaimHistory(BaseApi):
+    def get(self, request, pk):
+        self.require_user(request)
+        claim = authorized_claim(request.user, pk)
+        return self.page(HistoryOutput, claim.history.order_by("-created_at", "-pk"), request)
 
 
 class ClaimResubmission(BaseApi):

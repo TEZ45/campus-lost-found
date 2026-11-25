@@ -10,6 +10,7 @@ dependencies = [
     "pillow>=13.0,<14",
     "redis>=8.1,<9",
     "psycopg[binary]>=3.2,<4",
+    "waitress>=3.0.2,<4",
 ]
 
 [project.optional-dependencies]

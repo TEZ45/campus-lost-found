@@ -1,0 +1,6 @@
+[Unit]
+Description=Campus service failure %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p daemon.err -- Campus service failed: %i. Inspect the system journal.

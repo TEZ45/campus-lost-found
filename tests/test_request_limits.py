@@ -50,6 +50,7 @@ def isolated_guard(settings):
     settings.DEBUG = True
     settings.REQUEST_LIMITS_TRUSTED_PROXIES = []
     settings.REQUEST_LIMITS_IP_ENDPOINT_MULTIPLIER = 1
+    settings.REQUEST_LIMITS_IP = {}
     settings.ROOT_URLCONF = __name__
     settings.REQUEST_LIMITS = {
         scope: [(1000, 60)] for scope in settings.REQUEST_LIMITS
@@ -58,6 +59,26 @@ def isolated_guard(settings):
 
 def set_budget(settings, scope, limit, seconds=60):
     settings.REQUEST_LIMITS = {**settings.REQUEST_LIMITS, scope: [(limit, seconds)]}
+
+
+def test_json_writes_do_not_consume_file_upload_budget(client, settings):
+    set_budget(settings, "upload", 1)
+    for _ in range(2):
+        assert client.post("/api/v1/reports/", {}, content_type="application/json").status_code == 200
+    assert client.post("/report/new/").status_code == 200
+    assert client.post("/report/new/").status_code == 429
+
+
+def test_ip_write_allowance_preserves_account_limits(client, users, settings):
+    set_budget(settings, "write", 1)
+    settings.REQUEST_LIMITS_IP = {"write": [(3, 60)]}
+    client.force_login(users["owner"])
+    assert client.post("/api/v1/reports/").status_code == 200
+    assert client.post("/api/v1/reports/").status_code == 429
+    client.force_login(users["other"])
+    assert client.post("/api/v1/reports/").status_code == 200
+    client.force_login(users["claimant"])
+    assert client.post("/api/v1/reports/").status_code == 429
 
 
 @pytest.mark.parametrize("endpoint", ["/login/", "/api/v1/auth/login/"])

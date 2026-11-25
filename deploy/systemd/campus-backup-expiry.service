@@ -1,0 +1,9 @@
+[Unit]
+Description=Expire protected Campus backup chains
+OnFailure=campus-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/campus/app
+ExecStart=/srv/campus/app/.venv/bin/python scripts/backup_snapshot.py prune --root /srv/campus-backups --apply
+TimeoutStartSec=10min

@@ -80,6 +80,26 @@ class RegisterInput(StrictSerializer):
     password2 = serializers.CharField(trim_whitespace=False, write_only=True)
 
 
+def output_context(request, values):
+    reports = {}
+    for value in values:
+        if isinstance(value, Report):
+            reports[value.pk] = value
+        elif isinstance(value, Claim):
+            reports[value.report_id] = value.report
+        elif isinstance(value, Match):
+            reports[value.lost_report_id] = value.lost_report
+            reports[value.found_report_id] = value.found_report
+    reservations = {pk: [] for pk, report in reports.items()
+                    if can_manage_report(request.user, report)}
+    if reservations:
+        for report_id, pk, state in Claim.objects.filter(
+            report_id__in=reservations, status__in=Claim.RESERVED_STATES,
+        ).values_list("report_id", "pk", "status"):
+            reservations[report_id].append((pk, state))
+    return {"request": request, "reservations": reservations}
+
+
 class ReportOutput(serializers.ModelSerializer):
     reference = serializers.CharField(read_only=True)
     photo_url = serializers.SerializerMethodField()
@@ -96,7 +116,8 @@ class ReportOutput(serializers.ModelSerializer):
         return report.photo.url if report.photo else None
 
     def get_allowed_actions(self, report):
-        return report_actions(self.context["request"].user, report)
+        return report_actions(self.context["request"].user, report,
+                              reservations=self.context.get("reservations", {}).get(report.pk))
 
     def to_representation(self, instance):
         result = super().to_representation(instance)
@@ -123,14 +144,14 @@ class ClaimOutput(serializers.ModelSerializer):
     reference = serializers.CharField(read_only=True)
     report = ReportOutput(read_only=True)
     attachments = serializers.SerializerMethodField()
-    history = HistoryOutput(many=True, read_only=True)
+    history_url = serializers.SerializerMethodField()
     allowed_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = Claim
         fields = [
             "id", "reference", "report", "claimant_name", "claimant_email", "claimant_phone",
-            "evidence", "current_reason", "status", "attachments", "history", "created_at", "updated_at",
+            "evidence", "current_reason", "status", "attachments", "history_url", "created_at", "updated_at",
             "finalized_at", "evidence_purged_at", "handover_started_at", "handover_completed_at",
             "handover_started_by", "handover_completed_by",
             "allowed_actions",
@@ -140,8 +161,12 @@ class ClaimOutput(serializers.ModelSerializer):
         return [{"id": attachment.pk, "url": reverse("reports_api:attachment", args=[attachment.pk])}
                 for attachment in claim.attachments.all()]
 
+    def get_history_url(self, claim):
+        return reverse("reports_api:claim-history", args=[claim.pk])
+
     def get_allowed_actions(self, claim):
-        return claim_actions(self.context["request"].user, claim)
+        return claim_actions(self.context["request"].user, claim,
+                             reservations=self.context.get("reservations", {}).get(claim.report_id))
 
 
 class NoticeOutput(serializers.ModelSerializer):

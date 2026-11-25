@@ -111,4 +111,6 @@ jobs:
           SECURE_HSTS_SECONDS: "31536000"
           SECURE_HSTS_INCLUDE_SUBDOMAINS: "True"
           SECURE_HSTS_PRELOAD: "True"
+          RECOVERY_STATE_FILE: /tmp/campus-control/recovery/state.json
+          OPS_STATE_DIR: /tmp/campus-operations
         run: .venv/bin/python manage.py check --deploy --fail-level WARNING

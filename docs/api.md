@@ -29,6 +29,7 @@ CSRF failures return 403. Unauthenticated protected reads return 401.
 | POST | `reports/{id}/claims/` | Submit private ownership evidence |
 | GET | `claims/` | Own claims |
 | GET | `claims/{id}/` | Claimant or service-staff claim detail |
+| GET | `claims/{id}/history/` | Paginated history for the claimant or service staff |
 | POST | `claims/{id}/resubmit/` | Submit replacement evidence and optional images |
 | POST | `claims/{id}/withdraw/` | Withdraw before handover |
 | GET | `attachments/{id}/` | Download evidence after authorisation |
@@ -76,6 +77,16 @@ images per request and five per claim. Aggregate file data is limited to
 Evidence resubmission from `awaiting_evidence` returns to `pending`; from
 `under_dispute` it stays disputed and retains the reservation. Claim responses
 include `finalized_at`, `evidence_purged_at` and handover actor/time fields.
+All claim responses, including lists and action results, replace the embedded
+`history` array with `history_url`. Clients fetch this relative URL separately
+with the same session cookie. History returns `{count, next, previous, results}`,
+with `page` and `page_size` (default 20, maximum 100), ordered by descending
+creation time and then ID. Follow `next` to read older entries. Concurrent
+additions can shift page boundaries; refresh from page 1 to see new actions.
+Unauthenticated requests return 401, unrelated users (including report owners
+and admin-only users) receive 403, and missing claims return 404. Permission
+checks run before report, attachment or history loading. History retention
+remains 45 days; evidence and ended records retain their 15/30-day policy.
 After evidence expiry, text is empty and attachments disappear; the expiry
 marker explains this result. Report responses include `closed_at`. Audit
 history has stable report/claim references even after those objects expire.
@@ -103,7 +114,8 @@ default. History includes the accepted confirmations with the server-recorded
 actor and time. These are staff attestations, not automatic proof of custody.
 
 Record handover start successfully before releasing the item. After an unknown
-response, GET the claim and review its status/history before another action.
+response, GET the claim and fetch its `history_url` to review the recorded
+outcome before another action.
 Completed remains final; uncertain physical outcomes remain in progress and
 retain their reservation. Repeating a completed transition returns 409 and
 does not create another handover record.
@@ -132,9 +144,13 @@ downloads use an attachment disposition and private, no-store caching.
 
 API and HTML routes enforce shared IP and authenticated-account windows,
 including separate login, registration, search, write and upload budgets.
+Multipart file submissions consume the upload budget; JSON metadata writes
+consume the write budget. Shared-IP allowances do not raise per-account limits.
 Rate rejection returns 429 with `Retry-After`; unavailable limit accounting
 returns 503 rather than silently accepting work. Wait before retrying and
 query saved status before repeating a business action.
+The shared-IP defaults are 3000 requests per minute and 180000 per hour, allowing
+the 40-RPS campus-NAT capacity target. Account and endpoint limits still apply.
 
 Matching regeneration has a shared lease, a default 30-second cooldown,
 2500-pair cap and a 10-second cooperative processing budget. Busy/deadline

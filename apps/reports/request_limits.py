@@ -125,7 +125,8 @@ def endpoint_budgets(request):
             budgets.append("login")
         elif path in {"/register/", "/api/v1/auth/register/"}:
             budgets.append("register")
-        if any(pattern.fullmatch(path) for pattern in UPLOAD_PATHS):
+        if (request.content_type == "multipart/form-data"
+                and any(pattern.fullmatch(path) for pattern in UPLOAD_PATHS)):
             budgets.append("upload")
         return budgets
     if request.method in {"GET", "HEAD"} and path in {
@@ -185,9 +186,13 @@ class RequestProtectionMiddleware:
             backend = guard_cache()
             waits = []
             for scope in scopes:
-                for limit, seconds in settings.REQUEST_LIMITS[scope]:
-                    if identity[0] == "ip" and scope not in {"ip_burst", "ip_sustained"}:
-                        limit *= settings.REQUEST_LIMITS_IP_ENDPOINT_MULTIPLIER
+                windows = settings.REQUEST_LIMITS[scope]
+                if identity[0] == "ip" and scope not in {"ip_burst", "ip_sustained"}:
+                    windows = settings.REQUEST_LIMITS_IP.get(scope, [
+                        (limit * settings.REQUEST_LIMITS_IP_ENDPOINT_MULTIPLIER, seconds)
+                        for limit, seconds in windows
+                    ])
+                for limit, seconds in windows:
                     waits.append(consume_budget(
                         backend, f"{identity[0]}:{scope}:{seconds}", identity[1], limit, seconds,
                     ))

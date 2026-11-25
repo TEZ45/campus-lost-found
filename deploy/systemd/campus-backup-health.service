@@ -1,0 +1,9 @@
+[Unit]
+Description=Campus backup freshness and expiry check
+OnFailure=campus-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/campus/app
+ExecStart=/srv/campus/app/.venv/bin/python scripts/backup_snapshot.py status --root /srv/campus-backups
+TimeoutStartSec=50
